@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>GeneMI Pipeline</title>
+    <link rel="stylesheet" href="styles.css" />
+    <script defer src="app.js"></script>
+  </head>
+  <body>
+    <main class="container">
+      <header>
+        <h1>GeneMI Pipeline</h1>
+        <p class="subtitle">
+          Configure the simulation parameters and monitor the four pipeline stages in real time.
+        </p>
+      </header>
+
+      <section class="card">
+        <form id="pipeline-form" novalidate>
+          <div class="form-grid">
+            <label class="field">
+              <span>Extract timestep *</span>
+              <input
+                type="number"
+                id="extract-time"
+                name="extractTime"
+                min="0"
+                required
+                placeholder="e.g. 108"
+              />
+              <small>VTU timestep to post-process (e.g. 108 → output_108\*.vtu).</small>
+            </label>
+
+            <label class="field">
+              <span>Simulation time</span>
+              <input
+                type="number"
+                id="simulation-time"
+                name="simulationTime"
+                step="0.1"
+                placeholder="defaults to extract timestep"
+              />
+              <small>Leave empty to reuse the extract timestep value.</small>
+            </label>
+
+            <label class="field">
+              <span>Mesh path</span>
+              <input
+                type="text"
+                id="mesh"
+                name="mesh"
+                value="mesh/MNI_with_phys.msh"
+                placeholder="mesh/MNI_with_phys.msh"
+              />
+              <small>Relative to the repository root unless absolute.</small>
+            </label>
+
+            <label class="field">
+              <span>MPI processes</span>
+              <input
+                type="number"
+                id="procs"
+                name="procs"
+                min="1"
+                value="4"
+              />
+              <small>Number of MPI ranks to launch via mpirun.</small>
+            </label>
+          </div>
+
+          <div class="form-actions">
+            <button type="submit" id="run-button">Run pipeline</button>
+          </div>
+          <div id="form-errors" role="alert" aria-live="polite"></div>
+        </form>
+      </section>
+
+      <section class="card">
+        <h2>Progress</h2>
+        <p id="status-message"></p>
+        <pre id="command-preview"></pre>
+        <div id="progress-bar">
+          <div class="stage" data-stage="Compiling sources">
+            <span class="stage-index">1</span>
+            <span class="stage-label">Compiling sources</span>
+          </div>
+          <div class="stage" data-stage="Running simulation">
+            <span class="stage-index">2</span>
+            <span class="stage-label">Running simulation</span>
+          </div>
+          <div class="stage" data-stage="Extracting mesh subsets">
+            <span class="stage-index">3</span>
+            <span class="stage-label">Extracting mesh subsets</span>
+          </div>
+          <div class="stage" data-stage="Extracting surfaces">
+            <span class="stage-index">4</span>
+            <span class="stage-label">Extracting surfaces</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="card">
+        <div id="terminal-wrapper" class="collapsed">
+          <div class="terminal-header">
+            <span>Terminal output</span>
+            <button type="button" id="toggle-terminal">Show log</button>
+          </div>
+          <pre id="terminal-log"></pre>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>
