@@ -5,6 +5,7 @@ const commandPreview = document.getElementById("command-preview");
 const formErrors = document.getElementById("form-errors");
 const stageElements = Array.from(document.querySelectorAll(".stage"));
 const stageLookup = new Map(stageElements.map((el) => [el.dataset.stage, el]));
+const stageOrder = stageElements.map((el) => el.dataset.stage);
 const terminalWrapper = document.getElementById("terminal-wrapper");
 const toggleTerminalBtn = document.getElementById("toggle-terminal");
 const terminalLog = document.getElementById("terminal-log");
@@ -25,9 +26,10 @@ function setStageStatus(stageName, status) {
 }
 
 function appendLog(line) {
-  const needsNewline = terminalLog.textContent?.endsWith("\n") ?? true;
-  terminalLog.textContent += (needsNewline ? "" : "\n") + line;
-  terminalLog.textContent += "\n";
+  if (terminalLog.textContent.length > 0 && !terminalLog.textContent.endsWith("\n")) {
+    terminalLog.textContent += "\n";
+  }
+  terminalLog.textContent += line + "\n";
   terminalLog.scrollTop = terminalLog.scrollHeight;
 }
 
@@ -57,7 +59,10 @@ function renderErrors(errors) {
     return;
   }
   const items = Object.entries(errors)
-    .map(([field, message]) => `<li><strong>${field}</strong>: ${message}</li>`)
+    .map(([field, message]) => {
+      const label = fieldLabels[field] ?? field;
+      return `<li><strong>${label}</strong>: ${message}</li>`;
+    })
     .join("");
   formErrors.innerHTML = `<ul>${items}</ul>`;
 }
@@ -80,6 +85,9 @@ function handleEvent(data) {
   switch (data.type) {
     case "init":
       resetStages();
+      if (stageOrder.length) {
+        setStageStatus(stageOrder[0], "running");
+      }
       setCommandPreview(data.command);
       appendLog("# Starting pipeline");
       break;
@@ -130,17 +138,25 @@ async function startPipeline(event) {
   terminalLog.textContent = "";
   resetStages();
 
-  const extractTime = form.extractTime.value.trim();
+  const extractYearsRaw = form.extractTime.value.trim();
   const simulationTime = form.simulationTime.value.trim();
   const mesh = form.mesh.value.trim();
   const procs = form.procs.value.trim();
 
-  if (!extractTime) {
-    renderErrors({ extractTime: "Please provide the timestep to extract." });
+  if (!extractYearsRaw) {
+    renderErrors({ extractTime: "Please provide the number of simulation years." });
     return;
   }
 
-  const payload = { extractTime };
+  const yearsNumber = Number(extractYearsRaw);
+  if (Number.isNaN(yearsNumber) || yearsNumber < 0) {
+    renderErrors({ extractTime: "Years must be a positive number." });
+    return;
+  }
+
+  const timestep = Math.round(yearsNumber * 12);
+
+  const payload = { extractTime: timestep };
   if (simulationTime) payload.simulationTime = simulationTime;
   if (mesh) payload.mesh = mesh;
   if (procs) payload.procs = procs;
@@ -177,7 +193,7 @@ async function startPipeline(event) {
       return;
     }
 
-    setStatus("Pipeline started…");
+    setStatus("Pipeline launched. Tracking live progress…");
 
     currentSource = new EventSource(`/api/stream/${data.runId}`);
     currentSource.onmessage = (event) => {
@@ -213,3 +229,9 @@ window.addEventListener("beforeunload", closeEventSource);
 // Initialise defaults on load.
 resetStages();
 toggleTerminalBtn.textContent = "Show log";
+const fieldLabels = {
+  extractTime: "Simulation years",
+  simulationTime: "Simulation time",
+  mesh: "Mesh path",
+  procs: "MPI processes",
+};
