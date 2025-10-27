@@ -1,0 +1,449 @@
+#include "FisherKolmogorov.hpp"
+#include <set>
+#include <deal.II/lac/affine_constraints.templates.h>
+
+template<unsigned int dim>
+void FisherKolmogorov<dim>::setup()
+{
+  // Create the mesh.
+  {
+    pcout << "Initializing the mesh" << std::endl;
+
+    Triangulation<dim> mesh_serial;
+
+    GridIn<dim> grid_in;
+    grid_in.attach_triangulation(mesh_serial);
+
+    std::ifstream grid_in_file(mesh_file_name);
+    grid_in.read_msh(grid_in_file);
+
+    GridTools::partition_triangulation(mpi_size, mesh_serial);
+    const auto construction_data = TriangulationDescription::Utilities::create_description_from_triangulation(mesh_serial, MPI_COMM_WORLD);
+    mesh.create_triangulation(construction_data);
+
+    pcout << "  Number of elements = " << mesh.n_global_active_cells()
+          << std::endl;
+  }
+
+  pcout << "-----------------------------------------------" << std::endl;
+
+  // Initialize the finite element space.
+  {
+    pcout << "Initializing the finite element space" << std::endl;
+
+    fe = std::make_unique<FE_SimplexP<dim>>(r);
+
+    pcout << "  Degree                     = " << fe->degree << std::endl;
+    pcout << "  DoFs per cell              = " << fe->dofs_per_cell << std::endl;
+
+    quadrature = std::make_unique<QGaussSimplex<dim>>(r + 1);
+
+    pcout << "  Quadrature points per cell = " << quadrature->size() << std::endl;
+    
+    quadrature_boundary = std::make_unique<QGaussSimplex<dim - 1>>(r + 1);
+    
+    pcout << "  Quadrature points per boundary cell = " << quadrature_boundary->size() << std::endl;
+  }
+
+  pcout << "-----------------------------------------------" << std::endl;
+
+  // Initialize the DoF handler.
+  {
+    pcout << "Initializing the DoF handler" << std::endl;
+
+    dof_handler.reinit(mesh);
+    dof_handler.distribute_dofs(*fe);
+
+    locally_owned_dofs = dof_handler.locally_owned_dofs();
+    DoFTools::extract_locally_relevant_dofs(dof_handler, locally_relevant_dofs);
+
+    pcout << "  Number of DoFs = " << dof_handler.n_dofs() << std::endl;
+
+    constraints.clear();
+    constraints.reinit(locally_relevant_dofs);
+
+    const std::set<std::string> zero_dirichlet_material_names = {
+      "CSF",
+      "ventricule"
+    };
+
+    std::set<unsigned int> zero_dirichlet_material_ids;
+    for (const auto &material : mesh_data.material_names)
+      if (zero_dirichlet_material_names.count(material.second) > 0)
+        zero_dirichlet_material_ids.insert(material.first);
+
+    if (!zero_dirichlet_material_ids.empty())
+      {
+        std::set<types::global_dof_index> dirichlet_dofs;
+        std::vector<types::global_dof_index> cell_dof_indices(fe->dofs_per_cell);
+
+        for (const auto &cell : dof_handler.active_cell_iterators())
+          {
+            if (!cell->is_locally_owned())
+              continue;
+
+            if (zero_dirichlet_material_ids.count(cell->material_id()) == 0)
+              continue;
+
+            cell->get_dof_indices(cell_dof_indices);
+            dirichlet_dofs.insert(cell_dof_indices.begin(),
+                                  cell_dof_indices.end());
+          }
+
+        for (const auto dof_index : dirichlet_dofs)
+          {
+            constraints.add_line(dof_index);
+            constraints.set_inhomogeneity(dof_index, 0.0);
+          }
+
+        const unsigned int local_count = dirichlet_dofs.size();
+        const unsigned int global_count =
+          Utilities::MPI::sum(local_count, MPI_COMM_WORLD);
+
+        if (global_count > 0)
+          pcout << "  Applied zero Dirichlet constraint on "
+                << global_count
+                << " DoFs belonging to materials {CSF, ventricule}" << std::endl;
+      }
+
+    constraints.close();
+
+    // Calculate axon vector field for visualization
+    axon_fe = std::make_unique<FESystem<dim>>(FE_SimplexP<dim>(r), dim);
+    axon_dof_handler.reinit(mesh);
+    axon_dof_handler.distribute_dofs(*axon_fe);
+    axonal_vector.reinit(axon_dof_handler.n_dofs());
+    
+    // Interpolate the axonal field
+    AxonTensorFunction axon_tensor_function(*this);
+    VectorTools::interpolate(
+        axon_dof_handler,
+        VectorFunctionFromTensorFunction<dim>(axon_tensor_function),
+        axonal_vector
+    );
+
+    // Calculate white/gray matter distribution for visualization
+    std::vector<unsigned int> material_id_vec;
+    for (const auto &cell : dof_handler.active_cell_iterators())
+      if (cell->is_locally_owned() || cell->is_ghost())
+        material_id_vec.push_back(cell->material_id());
+
+    material_ids.reinit(material_id_vec.size());
+    for (unsigned int i = 0; i < material_id_vec.size(); ++i)
+      material_ids[i] = material_id_vec[i];
+
+    }
+
+  pcout << "-----------------------------------------------" << std::endl;
+
+  // Initialize the linear system.
+  {
+    pcout << "Initializing the linear system" << std::endl;
+
+    pcout << "  Initializing the sparsity pattern" << std::endl;
+
+    TrilinosWrappers::SparsityPattern sparsity(locally_owned_dofs,
+                                               MPI_COMM_WORLD);
+    DoFTools::make_sparsity_pattern(dof_handler, sparsity);
+    sparsity.compress();
+
+    pcout << "  Initializing the matrices" << std::endl;
+    jacobian_matrix.reinit(sparsity);
+
+    pcout << "  Initializing the system right-hand side" << std::endl;
+    residual_vector.reinit(locally_owned_dofs, MPI_COMM_WORLD);
+    pcout << "  Initializing the solution vector" << std::endl;
+    solution_owned.reinit(locally_owned_dofs, MPI_COMM_WORLD);
+    delta_owned.reinit(locally_owned_dofs, MPI_COMM_WORLD);
+
+    solution.reinit(locally_owned_dofs, locally_relevant_dofs, MPI_COMM_WORLD);
+    solution_old = solution;
+  }
+}
+
+template<unsigned int dim>
+void FisherKolmogorov<dim>::assemble_system()
+{
+  const unsigned int dofs_per_cell = fe->dofs_per_cell;
+  const unsigned int n_q           = quadrature->size();
+
+  FEValues<dim> fe_values(*fe,
+                          *quadrature,
+                          update_values |
+                          update_gradients | 
+                          update_quadrature_points |
+                          update_JxW_values);
+  
+  
+  // FEFaceValues<dim> fe_values_boundary(*fe,
+  //                                      *quadrature_boundary,
+  //                                      update_values |
+  //                                      update_quadrature_points |
+  //                                      update_normal_vectors |
+  //                                      update_JxW_values);
+
+  FullMatrix<double> cell_matrix(dofs_per_cell, dofs_per_cell);
+  Vector<double>     cell_residual(dofs_per_cell);
+
+  std::vector<types::global_dof_index> dof_indices(dofs_per_cell);
+
+  jacobian_matrix = 0.0;
+  residual_vector = 0.0;
+
+  // Value and gradient of the solution on current cell.
+  std::vector<double>         solution_loc(n_q);
+  std::vector<Tensor<1, dim>> solution_gradient_loc(n_q);
+
+  // Value of the solution at previous timestep (un) on current cell.
+  std::vector<double> solution_old_loc(n_q);
+  std::vector<Tensor<1, dim>> solution_gradient_old_loc(n_q);
+
+  for (const auto &cell : dof_handler.active_cell_iterators())
+    {
+      if (!cell->is_locally_owned())
+        continue;
+
+      fe_values.reinit(cell);
+
+      cell_matrix   = 0.0;
+      cell_residual = 0.0;
+
+      fe_values.get_function_values(solution, solution_loc);
+      fe_values.get_function_gradients(solution, solution_gradient_loc);
+      fe_values.get_function_values(solution_old, solution_old_loc);
+      fe_values.get_function_gradients(solution_old, solution_gradient_old_loc);
+
+      int material_id = cell->material_id();
+
+      // Validate material id, warn about unrecognized ids
+      try{
+        mesh_data.material_names.at(material_id);
+      } catch (const std::out_of_range& e) {
+        pcout << "[ERROR] Out_of_Range. Found material ID = " << material_id << ", unmapped in MeshData." << std::endl;
+        pcout << "Add a mapping for " << material_id << " in mesh_data.hpp and recompile." << std::endl;
+        exit(-1);
+      }
+
+      for (unsigned int q = 0; q < n_q; ++q)
+        {
+          // Evaluate coefficients on this quadrature node.
+          Tensor<2,dim> d_loc;
+          d.tensor_value(material_id, fe_values.quadrature_point(q), d_loc);
+
+          const double alpha_loc = alpha.value(material_id, fe_values.quadrature_point(q));
+
+          for (unsigned int i = 0; i < dofs_per_cell; ++i)
+            {
+              for (unsigned int j = 0; j < dofs_per_cell; ++j)
+                {
+                  // Time derivative term.
+                  cell_matrix(i, j) += fe_values.shape_value(i, q) 
+                                        * fe_values.shape_value(j, q)
+                                        / deltat
+                                        * fe_values.JxW(q);
+
+                  cell_matrix(i, j) += 0.5*(d_loc * fe_values.shape_grad(j, q))
+                                       * fe_values.shape_grad(i, q)
+                                       * fe_values.JxW(q);
+
+                  cell_matrix(i, j) += -0.5*alpha_loc * fe_values.shape_value(j,q)
+                                       * fe_values.shape_value(i,q)
+                                       * fe_values.JxW(q);
+
+                  cell_matrix(i, j) += 0.5*2*alpha_loc * fe_values.shape_value(j,q)
+                                         * solution_loc[q]
+                                         * fe_values.shape_value(i,q)
+                                         * fe_values.JxW(q);
+                }
+
+              // Assemble the residual vector (with changed sign).
+
+              // Time derivative term.
+              cell_residual(i) -= (solution_loc[q] - solution_old_loc[q])
+                                  / deltat
+                                  * fe_values.shape_value(i, q)
+                                  * fe_values.JxW(q);
+
+              cell_residual(i) -= 0.5*(d_loc * solution_gradient_loc[q])
+                                  * fe_values.shape_grad(i, q)
+                                  * fe_values.JxW(q);
+              cell_residual(i) -= 0.5*(d_loc * solution_gradient_old_loc[q])
+                                  * fe_values.shape_grad(i, q)
+                                  * fe_values.JxW(q);
+
+              cell_residual(i) -= -0.5 * (alpha_loc * solution_loc[q] * (1.0 - solution_loc[q]) + 
+                                         alpha_loc * solution_old_loc[q] * (1.0 - solution_old_loc[q]))
+                                  * fe_values.shape_value(i,q)
+                                  * fe_values.JxW(q);
+            }
+        }
+
+      cell->get_dof_indices(dof_indices);
+
+      constraints.distribute_local_to_global(cell_matrix,
+                                             cell_residual,
+                                             dof_indices,
+                                             jacobian_matrix,
+                                             residual_vector);
+    }
+
+  jacobian_matrix.compress(VectorOperation::add);
+  residual_vector.compress(VectorOperation::add);
+}
+
+template<unsigned int dim>
+void FisherKolmogorov<dim>::solve_linear_system()
+{
+  SolverControl solver_control(10000, 1e-9); //* residual_vector.l2_norm());
+
+  SolverGMRES<TrilinosWrappers::MPI::Vector> solver(solver_control);
+  TrilinosWrappers::PreconditionSOR preconditioner;
+  preconditioner.initialize(jacobian_matrix, TrilinosWrappers::PreconditionSOR::AdditionalData(1.0));
+
+  constraints.set_zero(delta_owned);
+  solver.solve(jacobian_matrix, delta_owned, residual_vector, preconditioner);
+  constraints.distribute(delta_owned);
+  pcout << "  " << solver_control.last_step() << " GMRES iterations" << std::endl;
+}
+
+template<unsigned int dim>
+void FisherKolmogorov<dim>::solve_newton()
+{
+  const unsigned int n_max_iters        = 10;
+  const double       residual_tolerance = 1e-4;
+
+  unsigned int n_iter        = 0;
+  double       residual_norm = residual_tolerance + 1;
+
+  while (n_iter < n_max_iters && residual_norm > residual_tolerance)
+    {
+      assemble_system();
+      // NOT Symmetric
+
+      residual_norm = residual_vector.l2_norm();
+
+      pcout << "  Newton iteration " << n_iter << "/" << n_max_iters
+            << " - ||r|| = " << std::scientific << std::setprecision(6)
+            << residual_norm << std::flush;
+
+      // We actually solve the system only if the residual is larger than the
+      // tolerance.
+      if (residual_norm > residual_tolerance)
+        {
+          solve_linear_system();
+
+          solution_owned += delta_owned;
+          constraints.distribute(solution_owned);
+          solution = solution_owned;
+        }
+      else
+        {
+          pcout << " < tolerance" << std::endl;
+        }
+
+      ++n_iter;
+    }
+}
+
+template<unsigned int dim>
+void FisherKolmogorov<dim>::output(const unsigned int &time_step) const
+{
+  DataOut<dim> data_out;
+  data_out.add_data_vector(dof_handler, solution, "c");
+
+  std::vector<unsigned int> partition_int(mesh.n_active_cells());
+  GridTools::get_subdomain_association(mesh, partition_int);
+  const Vector<double> partitioning(partition_int.begin(), partition_int.end());
+  data_out.add_data_vector(partitioning, "partitioning");
+
+
+  std::vector<std::string> axon_names(dim, "axonal_vector");
+  std::vector<DataComponentInterpretation::DataComponentInterpretation> axon_interp(
+      dim, DataComponentInterpretation::component_is_part_of_vector);
+
+  data_out.add_data_vector(axon_dof_handler, axonal_vector, axon_names, axon_interp);
+  data_out.add_data_vector(material_ids, "material_id", DataOut<dim>::type_cell_data);
+
+  
+  data_out.build_patches();
+
+  data_out.write_vtu_with_pvtu_record(output_directory, "output", time_step, MPI_COMM_WORLD, 3);
+}
+
+template<unsigned int dim>
+void FisherKolmogorov<dim>::solve()
+{
+  pcout << "===============================================" << std::endl;
+
+  time = 0.0;
+
+  // Apply the initial condition.
+  {
+    pcout << "Applying the initial condition" << std::endl;
+    pcout << "Note: axonal_vector field will be written only at the first time step (time_step=0)." << std::endl;
+
+    VectorTools::interpolate(dof_handler, c_0, solution_owned);
+    constraints.distribute(solution_owned);
+    solution = solution_owned;
+
+    // Output the initial solution.
+    output(0);
+    pcout << "-----------------------------------------------" << std::endl;
+  }
+
+  unsigned int time_step = 0;
+
+  while (time < T - 0.5 * deltat)
+    {
+      time += deltat;
+      ++time_step;
+
+      // Store the old solution, so that it is available for assembly.
+      solution_old = solution;
+
+      pcout << "n = " << std::setw(3) << time_step << ", t = " << std::setw(5)
+            << std::fixed << time << std::endl;
+
+      // At every time step, we invoke Newton's method to solve the non-linear
+      // problem.
+      solve_newton();
+
+      double min = solution[0];
+      double max = solution[0];
+      for (unsigned int i = 1; i < solution.size(); ++i){
+        if(solution[i] < min)
+          min = solution[i];
+        if(solution[i] > max)
+          max = solution[i];
+      }
+      
+      double global_min, global_max;
+      MPI_Allreduce(&min, &global_min, 1, MPI_DOUBLE, MPI_MIN, MPI_COMM_WORLD);
+      MPI_Allreduce(&max, &global_max, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+
+      // Print solution bounds
+      pcout << "Exact Solution bounds (before clamping): (" << global_min << "," << global_max << ")\n";
+      if(min < -0.01) pcout << "!!! Relatively large negative value detected!\n"; 
+
+      // Clamp solution in (0,1)
+      for (unsigned int i = 0; i < solution.size(); ++i){
+        double val = solution[i];
+        solution[i] = std::max(0.0, std::min(1.0, val));
+      }
+      solution_owned = solution;
+      constraints.distribute(solution_owned);
+      solution = solution_owned;
+
+      if(time_step % outputPeriod == 0)
+          output(time_step);
+
+      // Uncomment to always output last time step.
+      // else if(time > T) 
+      //   output(int(time_step/outputPeriod)+1);
+
+      pcout << std::endl;
+    }
+}
+
+template class FisherKolmogorov<2>;
+template class FisherKolmogorov<3>;

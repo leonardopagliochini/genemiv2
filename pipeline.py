@@ -142,7 +142,7 @@ def main() -> int:
         [
             "python3",
             "extract_mesh.py",
-            "--timestep",
+            "--years",
             str(args.extract_time),
             "--output-dir",
             str(extracted_dir),
