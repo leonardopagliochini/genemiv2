@@ -47,6 +47,24 @@ namespace
   {
     return arg == long_opt || (!short_opt.empty() && arg == short_opt);
   }
+
+  std::string ensure_trailing_separator(std::string path)
+  {
+#ifdef _WIN32
+    const char preferred = '\\';
+#else
+    const char preferred = '/';
+#endif
+    if (path.empty())
+      return std::string(1, preferred);
+
+    const char last = path.back();
+    if (last == '/' || last == '\\')
+      return path;
+
+    path.push_back(preferred);
+    return path;
+  }
 }
 
 int main(int argc, char *argv[])
@@ -223,7 +241,7 @@ int main(int argc, char *argv[])
     }
 
   MPI_Barrier(MPI_COMM_WORLD);
-  output_directory = normalized_output_directory;
+  output_directory = ensure_trailing_separator(normalized_output_directory);
 
   printRankZero("Note: axonal_vector field and material_id will be written only at the first time step "
                 "(time_step=0), to save disk space.",

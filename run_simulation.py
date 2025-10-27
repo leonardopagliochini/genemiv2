@@ -6,14 +6,15 @@ Edit the variables below to customise the run without touching the C++ sources.
 """
 
 import subprocess
-import sys
 from pathlib import Path
+
+from paths import BUILD_DIR, REPO_ROOT, SIM_OUTPUT_DIR
 
 # ---------------------------------------------------------------------------
 # User-configurable parameters
 T = 9.0  # Final simulation time
 mesh_path = "mesh/MNI_with_phys.msh"  # Mesh preset or path to a supported mesh file
-output_folder = "output"  # Folder where VTU results will be written
+output_folder = SIM_OUTPUT_DIR  # Folder where VTU results will be written
 num_processors = 4  # Number of MPI processes to launch
 
 # Optional overrides (uncomment / adjust as needed)
@@ -23,8 +24,8 @@ num_processors = 4  # Number of MPI processes to launch
 
 
 def main() -> int:
-    repo_root = Path(__file__).resolve().parent
-    binary = repo_root / "build" / "main"
+    repo_root = REPO_ROOT
+    binary = BUILD_DIR / "main"
 
     if not binary.exists():
         print(f"[error] Binary '{binary}' not found. Compile the project first (e.g. python3 compile.py).")
@@ -33,6 +34,9 @@ def main() -> int:
     output_path = Path(output_folder)
     if not output_path.is_absolute():
         output_path = repo_root / output_path
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    print("T =", T)
 
     cmd = [
         "mpirun",

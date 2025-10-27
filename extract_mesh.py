@@ -6,13 +6,14 @@ from typing import Callable, Optional
 
 import meshio
 import numpy as np
+from paths import SIM_OUTPUT_DIR
+from time_units import months_to_years, years_to_months
 
 DEFAULT_YEARS = 9
 DEFAULT_TIMESTEP = DEFAULT_YEARS * 12
 DEFAULT_FIELD = "c"
 DEFAULT_THRESHOLD = 0.5
-INPUT_DIR = Path("build/output")
-EXPORT_DIR_TEMPLATE = "{years}_extracted"
+EXPORT_DIR_TEMPLATE = "{label}y_extracted"
 MATERIAL_FIELD = "material_id"
 MATERIAL_LABELS: dict[int, str] = {
     0: "gray_matter",
@@ -24,6 +25,11 @@ CSF_MATERIAL_ID = 1
 VENTRICLES_MATERIAL_ID = 3
 
 
+def format_years_label(years: float) -> str:
+    text = f"{years:.6f}".rstrip("0").rstrip(".")
+    return text or "0"
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
@@ -33,15 +39,21 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--years",
-        type=int,
-        default=DEFAULT_YEARS,
-        help="Numero di anni del dato; imposta il timestep predefinito a years*12.",
+        type=float,
+        default=None,
+        help=(
+            "Numero di anni del dato; imposta il timestep a years*12. "
+            f"Default: {DEFAULT_YEARS} anni."
+        ),
     )
     parser.add_argument(
         "--timestep",
         type=int,
-        default=DEFAULT_TIMESTEP,
-        help="Timestep number to inspect (e.g. 6 for files named output_006.xx.vtu).",
+        default=None,
+        help=(
+            "Timestep number to inspect (e.g. 6 for files named output_006.xx.vtu). "
+            f"Default: {DEFAULT_TIMESTEP}."
+        ),
     )
     parser.add_argument(
         "--field",
@@ -61,17 +73,44 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Directory where filtered meshes will be written. Default: '<years>_extracted'.",
     )
+    parser.add_argument(
+        "--input-dir",
+        type=Path,
+        default=SIM_OUTPUT_DIR,
+        help="Directory containing the raw simulation VTU files (default: build/output).",
+    )
     args = parser.parse_args()
-    if args.timestep == DEFAULT_TIMESTEP and args.years is not None:
-        args.timestep = args.years * 12
+
+    if args.years is not None:
+        try:
+            args.timestep = years_to_months(args.years)
+        except (TypeError, ValueError) as exc:
+            parser.error(str(exc))
+    elif args.timestep is None:
+        args.years = DEFAULT_YEARS
+        args.timestep = DEFAULT_TIMESTEP
+
+    if args.timestep is None:
+        parser.error("Unable to determine the timestep to process.")
+
+    canonical_years = months_to_years(args.timestep)
+    args.years = canonical_years
+    year_label = format_years_label(canonical_years)
+
     if args.output_dir is None:
-        args.output_dir = Path(EXPORT_DIR_TEMPLATE.format(years=args.years))
+        args.output_dir = Path(EXPORT_DIR_TEMPLATE.format(label=year_label))
+    if not args.output_dir.is_absolute():
+        args.output_dir = args.output_dir.resolve()
+    if not args.input_dir.is_absolute():
+        args.input_dir = args.input_dir.resolve()
+
+    args.year_label = year_label
     return args
 
 
-def find_vtu_files(timestep: int) -> list[Path]:
+def find_vtu_files(timestep: int, input_dir: Path) -> list[Path]:
     timestep_str = f"{timestep:03d}"
-    pattern = INPUT_DIR / f"output_{timestep_str}*.vtu"
+    pattern = input_dir / f"output_{timestep_str}*.vtu"
     return sorted(Path(path) for path in glob.glob(pattern.as_posix()))
 
 
@@ -292,9 +331,10 @@ def build_subset_mesh(
 
 def main() -> None:
     args = parse_args()
-    vtu_files = find_vtu_files(args.timestep)
+    input_dir = args.input_dir
+    vtu_files = find_vtu_files(args.timestep, input_dir)
     if not vtu_files:
-        pattern = INPUT_DIR / f"output_{args.timestep:03d}*.vtu"
+        pattern = input_dir / f"output_{args.timestep:03d}*.vtu"
         raise FileNotFoundError(
             f"Nessun file trovato per il timestep {args.timestep} usando il pattern {pattern}"
         )
@@ -302,7 +342,10 @@ def main() -> None:
     field_name = args.field
     threshold = args.threshold
 
-    print(f"Timestep {args.timestep:03d}: trovati {len(vtu_files)} file VTU.")
+    print(
+        f"Timestep {args.timestep:03d} ({format_years_label(args.years)} anni): "
+        f"trovati {len(vtu_files)} file VTU."
+    )
     points, cell_blocks, values, cell_materials = load_combined_mesh(
         vtu_files, field_name, MATERIAL_FIELD
     )
@@ -375,10 +418,10 @@ def main() -> None:
 
     output_dir = args.output_dir
     output_dir.mkdir(parents=True, exist_ok=True)
-    timestep_tag = f"{args.timestep:03d}"
+    year_label = args.year_label
 
     def save_mesh(tag_label: str, mesh: meshio.Mesh) -> None:
-        base_name = f"output_{timestep_tag}_{tag_label}"
+        base_name = f"output_{year_label}y_{tag_label}"
         vtu_path = output_dir / f"{base_name}.vtu"
 
         meshio.write(vtu_path.as_posix(), mesh)

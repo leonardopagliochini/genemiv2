@@ -5,6 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>GeneMI Simulation Studio</title>
     <link rel="stylesheet" href="styles.css" />
+    <!-- <script defer src="https://unpkg.com/three@0.161.0/build/three.min.js"></script> -->
+    <!-- <script defer src="https://unpkg.com/three@0.161.0/examples/js/controls/OrbitControls.js"></script> -->
+    <!-- <script defer src="https://unpkg.com/three@0.161.0/examples/js/loaders/STLLoader.js"></script> -->
     <script defer src="app.js"></script>
   </head>
   <body>
@@ -16,33 +19,33 @@
         </p>
       </header>
 
-      <section class="card">
+      <section class="card" id="form-card">
         <form id="pipeline-form" novalidate>
           <div class="form-grid">
             <label class="field">
-              <span>Simulation years *</span>
+              <span>Simulation time(s) (years) *</span>
               <input
-                type="number"
-                id="extract-time"
-                name="extractTime"
-                min="0"
+                type="text"
+                id="extract-years"
+                name="extractYears"
+                inputmode="decimal"
                 required
-                step="0.1"
-                placeholder="e.g. 9"
+                placeholder="e.g. 1, 2, 4"
               />
-              <small>Specify years; we convert automatically to timestep months (e.g. 9 → 108).</small>
+              <small>Provide one or more times in years, separated by commas (e.g. 1, 2, 4).</small>
             </label>
 
             <label class="field">
-              <span>Simulation time</span>
+              <span>Simulation horizon (years)</span>
               <input
                 type="number"
-                id="simulation-time"
-                name="simulationTime"
-                step="0.1"
-                placeholder="defaults to extract timestep"
+                id="simulation-years"
+                name="simulationYears"
+                min="0"
+                step="0.0833333333"
+                placeholder="defaults to extract time"
               />
-              <small>Leave empty to reuse the extract timestep value.</small>
+              <small>Leave empty to reuse the extract time value.</small>
             </label>
 
             <label class="field">
@@ -77,9 +80,12 @@
         </form>
       </section>
 
-      <section class="card">
+      <section class="card" id="progress-card">
         <h2>Pipeline Progress</h2>
         <p id="status-message"></p>
+        <div class="progress-actions">
+          <button type="button" id="cancel-button" class="danger-button" hidden>Stop run</button>
+        </div>
         <pre id="command-preview"></pre>
         <div id="progress-bar">
           <div class="stage" data-stage="Compiling sources">
@@ -99,9 +105,40 @@
             <span class="stage-label">Extracting surfaces</span>
           </div>
         </div>
+        <div id="simulation-progress" hidden>
+          <div class="progress-header">
+            <span class="progress-title">Simulation progress</span>
+            <span id="simulation-progress-count"></span>
+          </div>
+          <div class="progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+            <div class="progress-fill" id="simulation-progress-fill"></div>
+          </div>
+          <p id="simulation-progress-meta"></p>
+        </div>
       </section>
 
-      <section class="card">
+      <section class="card" id="outputs-card" hidden>
+        <h2>Output STL Files</h2>
+        <p id="outputs-empty">Run the pipeline to generate downloadable surfaces.</p>
+        <!--
+        <div id="viewer-container" hidden>
+          <div class="viewer-header">
+            <h3>3D Preview</h3>
+            <button type="button" id="reset-viewer" class="ghost-button viewer-reset">Reset view</button>
+          </div>
+          <div id="viewer-canvas-wrapper">
+            <canvas id="preview-canvas" aria-label="3D surfaces preview"></canvas>
+            <p id="viewer-hint">Drag to orbit, right-click to pan, scroll to zoom.</p>
+          </div>
+        </div>
+        -->
+        <div id="outputs-actions" hidden>
+          <a id="download-all" class="secondary-button" href="#" download>Download all</a>
+        </div>
+        <ul id="outputs-list"></ul>
+      </section>
+
+      <section class="card" id="log-card">
         <div id="terminal-wrapper" class="collapsed">
           <div class="terminal-header">
             <span>Terminal output</span>
@@ -111,5 +148,11 @@
         </div>
       </section>
     </main>
+    <nav class="mobile-nav" aria-label="Pipeline sections">
+      <button type="button" data-target="form-card" aria-controls="form-card">Inputs</button>
+      <button type="button" data-target="progress-card" aria-controls="progress-card">Progress</button>
+      <button type="button" data-target="outputs-card" aria-controls="outputs-card">Outputs</button>
+      <button type="button" data-target="log-card" aria-controls="log-card">Log</button>
+    </nav>
   </body>
 </html>

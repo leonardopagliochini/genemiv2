@@ -18,46 +18,112 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from paths import BUILD_DIR, SIM_OUTPUT_DIR, extracted_dir
+from time_units import months_to_years, years_to_months
+
+
+def parse_extract_years(raw_values: list[str]) -> tuple[list[float], list[int]]:
+    tokens: list[str] = []
+    for raw in raw_values or []:
+        if raw is None:
+            continue
+        chunks = str(raw).replace(",", " ").split()
+        tokens.extend(chunk for chunk in chunks if chunk)
+
+    if not tokens:
+        raise ValueError("--extract-years is required.")
+
+    seen_months: set[int] = set()
+    years_list: list[float] = []
+    months_list: list[int] = []
+
+    for token in tokens:
+        try:
+            numeric = float(token)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"Invalid --extract-years value '{token}'.") from exc
+        try:
+            months = years_to_months(numeric)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(str(exc)) from exc
+        if months in seen_months:
+            continue
+        seen_months.add(months)
+        years_list.append(months_to_years(months))
+        months_list.append(months)
+
+    return years_list, months_list
+
+
+def format_years_label(years: float) -> str:
+    formatted = f"{years:.6f}".rstrip("0").rstrip(".")
+    return formatted or "0"
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Compile, run the simulation, extract meshes, and export surfaces."
     )
     parser.add_argument(
-        "--simulation-time",
-        type=float,
-        default=None,
+        "--extract-years",
+        dest="extract_years",
+        type=str,
+        action="append",
         help=(
-            "Final simulation time passed to the solver. "
-            "Defaults to the value provided for --extract-time."
+            "Simulation time expressed in years to post-process "
+            "(e.g. 9 or 9,10 selects timesteps corresponding to these years)."
         ),
+        required=True,
     )
     parser.add_argument(
         "--extract-time",
-        type=int,
-        required=True,
+        dest="extract_years",
+        type=str,
+        action="append",
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--simulation-years",
+        dest="simulation_years",
+        type=float,
+        default=None,
         help=(
-            "Timestep index to post-process (e.g. 108 selects files named output_108*.vtu)."
+            "Final simulation time, expressed in years, passed to the solver. "
+            "Defaults to the maximum value provided for --extract-years."
         ),
     )
     parser.add_argument(
+        "--simulation-time",
+        dest="simulation_years",
+        type=float,
+        help=argparse.SUPPRESS,
+    )
+    extract_group = parser.add_argument_group("Simulation parameters")
+    extract_group.add_argument(
         "--mesh",
         type=str,
         default="mesh/MNI_with_phys.msh",
         help="Mesh file to feed to the solver.",
     )
-    parser.add_argument(
+    extract_group.add_argument(
         "--procs",
         type=int,
         default=4,
         help="Number of MPI processes to launch with mpirun.",
     )
-    return parser.parse_args()
+    args = parser.parse_args()
+    try:
+        (
+            args.extract_years,
+            args.extract_timesteps,
+        ) = parse_extract_years(args.extract_years)
+    except ValueError as exc:
+        parser.error(str(exc))
+    return args
 
 
 def run_command(label: str, cmd: list[str], cwd: Path) -> None:
     print(f"[step] {label}")
-    print(f"       {' '.join(cmd)}")
     subprocess.run(cmd, cwd=cwd, check=True)
 
 
@@ -92,32 +158,55 @@ def timestep_outputs_exist(output_dir: Path, timestep: int) -> bool:
 def main() -> int:
     args = parse_args()
     repo_root = Path(__file__).resolve().parent
-    build_dir = repo_root / "build"
-    build_dir.mkdir(exist_ok=True)
+
+    extract_years = args.extract_years
+    extract_timesteps = args.extract_timesteps
+    if not extract_years or not extract_timesteps:
+        raise ValueError("No valid extraction times were provided.")
+
+    extract_targets = list(zip(extract_timesteps, extract_years))
+    max_extract_year = max(extract_years)
 
     mesh_path = resolve_mesh(args.mesh, repo_root)
-    sim_time = args.simulation_time if args.simulation_time is not None else args.extract_time
-    if sim_time <= 0:
+    sim_years = (
+        args.simulation_years if args.simulation_years is not None else max_extract_year
+    )
+    if sim_years < 0:
         raise ValueError("Simulation time must be positive.")
 
-    # Step 1: compile the project.
-    run_command("Compiling sources", ["python3", "compile.py"], repo_root)
+    outputs_available = all(
+        timestep_outputs_exist(SIM_OUTPUT_DIR, timestep)
+        for timestep in extract_timesteps
+    )
 
-    # Step 2: run the simulation.
-    binary = ensure_binary(build_dir)
-    output_dir = build_dir / "output"
-    output_dir.mkdir(parents=True, exist_ok=True)
+    SIM_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    BUILD_DIR.mkdir(exist_ok=True)
 
-    mpirun = shutil.which("mpirun") or shutil.which("mpiexec")
-    if mpirun is None:
-        raise FileNotFoundError("Neither 'mpirun' nor 'mpiexec' was found in PATH.")
-
-    if timestep_outputs_exist(output_dir, args.extract_time):
-        print(
-            f"[skip] Found existing output for timestep {args.extract_time:03d}; "
-            "skipping simulation."
+    if outputs_available:
+        targets_summary = ", ".join(
+            f"{format_years_label(year)}y (timestep {timestep:03d})"
+            for timestep, year in extract_targets
         )
+        print(
+            "[skip] Compiling sources (existing results found for the requested timesteps)."
+        )
+        print(f"[skip] Running simulation (found existing outputs for {targets_summary}).")
     else:
+        if sim_years < max_extract_year:
+            raise ValueError(
+                f"Simulation time ({sim_years:g} years) must cover the requested extraction "
+                f"times (maximum {max_extract_year:g} years)."
+            )
+        # Step 1: compile the project.
+        run_command("Compiling sources", ["python3", "compile.py"], repo_root)
+
+        # Step 2: run the simulation.
+        binary = ensure_binary(BUILD_DIR)
+
+        mpirun = shutil.which("mpirun") or shutil.which("mpiexec")
+        if mpirun is None:
+            raise FileNotFoundError("Neither 'mpirun' nor 'mpiexec' was found in PATH.")
+
         run_command(
             "Running simulation",
             [
@@ -128,46 +217,51 @@ def main() -> int:
                 "--mesh",
                 str(mesh_path),
                 "--T",
-                str(sim_time),
+                str(sim_years),
                 "--output",
-                str(output_dir),
+                str(SIM_OUTPUT_DIR),
             ],
             repo_root,
         )
 
-    # Step 3: extract filtered meshes for the requested timestep.
-    extracted_dir = build_dir / f"extracted_{args.extract_time:03d}"
-    run_command(
-        "Extracting mesh subsets",
-        [
-            "python3",
-            "extract_mesh.py",
-            "--timestep",
-            str(args.extract_time),
-            "--output-dir",
-            str(extracted_dir),
-        ],
-        repo_root,
-    )
+    # Step 3: extract filtered meshes for the requested timesteps.
+    for timestep, years in extract_targets:
+        extracted_path = extracted_dir(timestep)
+        run_command(
+            "Extracting mesh subsets",
+            [
+                "python3",
+                "extract_mesh.py",
+                "--timestep",
+                str(timestep),
+                "--years",
+                format_years_label(years),
+                "--input-dir",
+                str(SIM_OUTPUT_DIR),
+                "--output-dir",
+                str(extracted_path),
+            ],
+            repo_root,
+        )
 
     # Step 4: extract surfaces using ParaView's pvpython, if available.
     pvpython = shutil.which("pvpython")
     if pvpython is None:
-        print(
-            "[warn] 'pvpython' not found in PATH. Skipping surface extraction step."
-        )
+        print("[warn] 'pvpython' not found in PATH. Skipping surface extraction step.")
         return 0
 
-    run_command(
-        "Extracting surfaces",
-        [
-            pvpython,
-            "extract_surfaces.py",
-            "--input",
-            str(extracted_dir),
-        ],
-        repo_root,
-    )
+    for timestep, _years in extract_targets:
+        extracted_path = extracted_dir(timestep)
+        run_command(
+            "Extracting surfaces",
+            [
+                pvpython,
+                "extract_surfaces.py",
+                "--input",
+                str(extracted_path),
+            ],
+            repo_root,
+        )
 
     print("[done] Pipeline completed successfully.")
     return 0

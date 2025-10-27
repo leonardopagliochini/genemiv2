@@ -52,24 +52,24 @@ MeshData<3> MNI{
         {3, "ventricule"}
     },
     {    // isotropic diffusion (name -> value)
-        {"gray matter", 3},
+        {"gray matter", 0.18},
         {"CSF", 0},
-        {"white matter", 3},
+        {"white matter", 1.83},
         {"ventricule", 0}
     },
     {    // axonal diffusion (name -> value)
-        {"gray matter", 50},
+        {"gray matter", 0.18},
         {"CSF", 0},
-        {"white matter", 50},
+        {"white matter", 1.83},
         {"ventricule", 0}
     },
     {    // alpha coefficients (name -> value)
-        {"gray matter", 0.6},
+        {"gray matter", 4.4},
         {"CSF", 0},
-        {"white matter", 1.8},
+        {"white matter", 4.4},
         {"ventricule", 0}
     },
-    -40, -18.0, -10.0, // x0, y0, z0 (initial condition center coords)
+    35.35, 2.43, 4.95, // x0, y0, z0 (initial condition center coords) 
     15, // radius
     10, // center_threshold
     {0.0, 0.0, 40.0}, // axonal_center
