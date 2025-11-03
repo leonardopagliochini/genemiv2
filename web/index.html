@@ -19,7 +19,13 @@
         </p>
       </header>
 
-      <section class="card" id="form-card">
+      <section class="card" id="case-card">
+        <h2>Choose Scenario</h2>
+        <p class="case-intro">Select the anatomical model to configure the pipeline.</p>
+        <div class="case-grid" id="case-options"></div>
+      </section>
+
+      <section class="card" id="form-card" hidden>
         <form id="pipeline-form" novalidate>
           <div class="form-grid">
             <label class="field">
@@ -80,7 +86,7 @@
         </form>
       </section>
 
-      <section class="card" id="progress-card">
+      <section class="card" id="progress-card" hidden>
         <h2>Pipeline Progress</h2>
         <p id="status-message"></p>
         <div class="progress-actions">
@@ -138,7 +144,7 @@
         <ul id="outputs-list"></ul>
       </section>
 
-      <section class="card" id="log-card">
+      <section class="card" id="log-card" hidden>
         <div id="terminal-wrapper" class="collapsed">
           <div class="terminal-header">
             <span>Terminal output</span>
@@ -149,6 +155,7 @@
       </section>
     </main>
     <nav class="mobile-nav" aria-label="Pipeline sections">
+      <button type="button" data-target="case-card" aria-controls="case-card">Scenario</button>
       <button type="button" data-target="form-card" aria-controls="form-card">Inputs</button>
       <button type="button" data-target="progress-card" aria-controls="progress-card">Progress</button>
       <button type="button" data-target="outputs-card" aria-controls="outputs-card">Outputs</button>

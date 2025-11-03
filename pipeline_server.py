@@ -36,7 +36,13 @@ from flask import (
     stream_with_context,
 )
 
-from paths import REPO_ROOT, SIM_OUTPUT_DIR, extracted_dir, surfaces_dir
+from case_config import (
+    DEFAULT_CASE_KEY,
+    get_case_config,
+    get_case_key,
+    list_cases,
+)
+from paths import REPO_ROOT, extracted_dir, surfaces_dir
 from time_units import months_to_years, years_to_months
 
 PIPELINE_SCRIPT = REPO_ROOT / "pipeline.py"
@@ -149,6 +155,9 @@ def publish_event(run_id: str, payload: dict) -> None:
 
 def build_pipeline_command(params: dict) -> list[str]:
     cmd = ["python3", str(PIPELINE_SCRIPT)]
+    case_key = params.get("case")
+    if case_key:
+        cmd.extend(["--case", case_key])
     extract_years = params.get("extract_years") or []
     for years in extract_years:
         cmd.extend(["--extract-years", format_years_label(float(years))])
@@ -343,6 +352,20 @@ def index() -> Response:
     return send_from_directory(STATIC_DIR, "index.html")
 
 
+@app.get("/api/cases")
+def list_cases_api() -> Response:
+    cases_payload = [
+        {
+            "key": cfg.key,
+            "label": cfg.label,
+            "defaultMesh": cfg.default_mesh,
+            "defaultProcs": cfg.default_procs,
+        }
+        for cfg in list_cases()
+    ]
+    return jsonify({"cases": cases_payload, "default": DEFAULT_CASE_KEY})
+
+
 @app.post("/api/run")
 def start_run() -> Response:
     if not PIPELINE_SCRIPT.exists():
@@ -383,6 +406,14 @@ def start_run() -> Response:
         extract_timesteps = []
         errors["extractYears"] = str(exc)
 
+    raw_case = payload.get("case") or DEFAULT_CASE_KEY
+    try:
+        case_key = get_case_key(raw_case)
+    except ValueError as exc:
+        errors["case"] = str(exc)
+        case_key = DEFAULT_CASE_KEY
+    case_config = get_case_config(case_key)
+
     simulation_years = parse_float("simulationYears")
     if simulation_years is not None and simulation_years < 0:
         errors["simulationYears"] = "Must be >= 0."
@@ -391,7 +422,7 @@ def start_run() -> Response:
     if procs is not None and procs <= 0:
         errors["procs"] = "Must be > 0."
 
-    mesh = payload.get("mesh") or "mesh/MNI_with_phys.msh"
+    mesh = payload.get("mesh") or case_config.default_mesh
     mesh_path = Path(mesh)
     if not mesh_path.is_absolute():
         mesh_path = REPO_ROOT / mesh_path
@@ -406,12 +437,13 @@ def start_run() -> Response:
 
     run_id = uuid.uuid4().hex
     params = {
+        "case": case_key,
         "extract_years": extract_years_list,
         "extract_timesteps": extract_timesteps,
         "simulation_years": simulation_years,
         "mesh": str(mesh_path),
-        "procs": procs if procs is not None else 4,
-        "output_dir": str(SIM_OUTPUT_DIR),
+        "procs": procs if procs is not None else case_config.default_procs,
+        "output_dir": str(case_config.sim_output_dir()),
     }
 
     target_time = None
@@ -421,16 +453,17 @@ def start_run() -> Response:
     elif extract_years_list:
         target_time = max(extract_years_list)
 
-    extracted_paths = [extracted_dir(timestep) for timestep in extract_timesteps]
-    surfaces_paths = [surfaces_dir(timestep) for timestep in extract_timesteps]
+    extracted_paths = [extracted_dir(timestep, case_key) for timestep in extract_timesteps]
+    surfaces_paths = [surfaces_dir(timestep, case_key) for timestep in extract_timesteps]
 
     state = RunState(params=params, target_time=target_time)
     runs[run_id] = state
     run_metadata[run_id] = {
+        "case": case_key,
         "params": params,
         "target_time": target_time,
         "surfaces_dirs": [str(path) for path in surfaces_paths],
-        "simulation_output_dir": str(SIM_OUTPUT_DIR),
+        "simulation_output_dir": str(case_config.sim_output_dir()),
         "extracted_dirs": [str(path) for path in extracted_paths],
         "extract_years": extract_years_list,
         "extract_timesteps": extract_timesteps,
@@ -551,6 +584,20 @@ def download_all(run_id: str) -> Response:
     if not files:
         abort(404)
 
+    case_key = metadata.get("case")
+    try:
+        case_config = get_case_config(case_key)
+        case_part = case_config.key
+    except ValueError:
+        case_part = (case_key or DEFAULT_CASE_KEY) or "case"
+    year_values = metadata.get("extract_years") or []
+    if year_values:
+        years_part = "-".join(format_years_label(float(year)) for year in year_values)
+        base_name = f"{case_part}_{years_part}"
+    else:
+        base_name = case_part
+    zip_name = f"{base_name}_{run_id[:8]}_outputs.zip"
+
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         for path in files:
@@ -563,7 +610,7 @@ def download_all(run_id: str) -> Response:
         buffer,
         mimetype="application/zip",
         as_attachment=True,
-        download_name=f"{run_id}_outputs.zip",
+        download_name=zip_name,
     )
 
 

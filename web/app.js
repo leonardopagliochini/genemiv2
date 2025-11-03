@@ -1,4 +1,6 @@
 const form = document.getElementById("pipeline-form");
+const meshInput = document.getElementById("mesh");
+const procsInput = document.getElementById("procs");
 const runButton = document.getElementById("run-button");
 const statusMessage = document.getElementById("status-message");
 const commandPreview = document.getElementById("command-preview");
@@ -14,6 +16,11 @@ const simulationProgress = document.getElementById("simulation-progress");
 const simulationProgressFill = document.getElementById("simulation-progress-fill");
 const simulationProgressCount = document.getElementById("simulation-progress-count");
 const simulationProgressMeta = document.getElementById("simulation-progress-meta");
+const caseCard = document.getElementById("case-card");
+const caseOptionsContainer = document.getElementById("case-options");
+const formCard = document.getElementById("form-card");
+const progressCard = document.getElementById("progress-card");
+const logCard = document.getElementById("log-card");
 const outputsCard = document.getElementById("outputs-card");
 const outputsEmpty = document.getElementById("outputs-empty");
 const outputsActions = document.getElementById("outputs-actions");
@@ -37,6 +44,30 @@ let wasCancelled = false;
 let lastActiveMobileSection = null;
 let surfaceViewer = null;
 let viewerResetBound = false;
+let currentCase = null;
+const caseDefaults = new Map();
+const FALLBACK_CASES = [
+  {
+    key: "brain",
+    label: "Brain",
+    defaultMesh: "mesh/MNI_with_phys.msh",
+    defaultProcs: 4,
+  },
+  {
+    key: "breast",
+    label: "Breast",
+    defaultMesh: "breast_scripts/mesh/breast_128_augmented.msh",
+    defaultProcs: 4,
+  },
+];
+
+function resolveCaseLabel(caseKey) {
+  if (!caseKey) {
+    return "";
+  }
+  const config = caseDefaults.get(caseKey) ?? FALLBACK_CASES.find((entry) => entry.key === caseKey);
+  return config?.label ?? caseKey;
+}
 
 function resetStages() {
   stageLookup.forEach((el) => {
@@ -61,12 +92,170 @@ function ensureOutputsHidden() {
   downloadAllLink.href = "#";
   downloadAllLink.removeAttribute("download");
   destroySurfaceViewer();
+  updateNavAvailability();
 }
 
 function resetCancellationState() {
   wasCancelled = false;
   cancelButton.hidden = true;
   cancelButton.disabled = false;
+}
+
+function updateCaseButtonsState() {
+  if (!caseOptionsContainer) {
+    return;
+  }
+  const buttons = Array.from(caseOptionsContainer.querySelectorAll("button[data-case]"));
+  buttons.forEach((button) => {
+    const isActive = button.dataset.case === currentCase;
+    button.classList.toggle("active", isActive);
+    button.setAttribute("aria-pressed", isActive ? "true" : "false");
+  });
+}
+
+function updateNavAvailability() {
+  if (!mobileNavButtons.length) {
+    return;
+  }
+  mobileNavButtons.forEach((button) => {
+    const targetId = button.dataset.target;
+    if (!targetId) {
+      button.disabled = true;
+      return;
+    }
+    const section = document.getElementById(targetId);
+    const shouldDisable = !section || (section.hidden && targetId !== "case-card");
+    button.disabled = shouldDisable;
+    if (shouldDisable) {
+      button.classList.remove("active");
+    }
+  });
+}
+
+function applyCaseDefaults(config) {
+  if (!config) {
+    return;
+  }
+  if (meshInput) {
+    meshInput.value = config.defaultMesh ?? "";
+  }
+  if (procsInput) {
+    if (typeof config.defaultProcs === "number" && Number.isFinite(config.defaultProcs)) {
+      procsInput.value = String(config.defaultProcs);
+    } else {
+      procsInput.value = "";
+    }
+  }
+}
+
+function resetForNewCase() {
+  closeEventSource();
+  runInProgress = false;
+  activeRunId = null;
+  resetCancellationState();
+  resetStages();
+  resetSimulationProgress();
+  ensureOutputsHidden();
+  clearErrors();
+  setStatus("");
+  setCommandPreview([]);
+  terminalLog.textContent = "";
+}
+
+function renderCaseOptions(casesData) {
+  if (!caseOptionsContainer) {
+    return;
+  }
+  caseOptionsContainer.innerHTML = "";
+  casesData.forEach((config) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "case-select";
+    button.dataset.case = config.key;
+    const label = config.label ?? config.key;
+    button.textContent = label;
+    button.setAttribute("aria-pressed", "false");
+    button.setAttribute("aria-label", `${label} scenario`);
+    button.addEventListener("click", () => selectCase(config.key));
+    caseOptionsContainer.appendChild(button);
+  });
+  updateCaseButtonsState();
+}
+
+function selectCase(caseKey) {
+  const config =
+    caseDefaults.get(caseKey) ??
+    FALLBACK_CASES.find((entry) => entry.key === caseKey);
+  if (!config) {
+    console.warn("[ui] Unknown case selection:", caseKey);
+    return;
+  }
+  if (runInProgress) {
+    setStatus("Stop the current run before changing scenario.", "error");
+    return;
+  }
+  currentCase = caseKey;
+  resetForNewCase();
+  applyCaseDefaults(config);
+  if (formCard) {
+    formCard.hidden = false;
+  }
+  if (progressCard) {
+    progressCard.hidden = false;
+  }
+  if (logCard) {
+    logCard.hidden = false;
+  }
+  updateCaseButtonsState();
+  updateNavAvailability();
+}
+
+function showCaseSelection({ scroll = false } = {}) {
+  if (caseCard) {
+    caseCard.hidden = false;
+    if (scroll) {
+      caseCard.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  }
+  updateCaseButtonsState();
+  updateNavAvailability();
+}
+
+async function loadCases() {
+  let payload;
+  try {
+    const response = await fetch("/api/cases", { cache: "no-store" });
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+    payload = await response.json();
+  } catch (error) {
+    console.warn("[ui] Unable to fetch cases from server, using fallback set.", error);
+    payload = { cases: FALLBACK_CASES };
+  }
+
+  const casesData = Array.isArray(payload?.cases) && payload.cases.length
+    ? payload.cases
+    : FALLBACK_CASES;
+
+  caseDefaults.clear();
+  casesData.forEach((item) => {
+    if (!item?.key) {
+      return;
+    }
+    caseDefaults.set(item.key, {
+      key: item.key,
+      label: item.label ?? item.key,
+      defaultMesh: item.defaultMesh ?? "",
+      defaultProcs:
+        typeof item.defaultProcs === "number" && Number.isFinite(item.defaultProcs)
+          ? item.defaultProcs
+          : 4,
+    });
+  });
+
+  renderCaseOptions(casesData);
+  updateNavAvailability();
 }
 
 function destroySurfaceViewer() {
@@ -539,6 +728,11 @@ async function startPipeline(event) {
   if (runInProgress) {
     return;
   }
+  if (!currentCase) {
+    renderErrors({ case: "Please select a scenario before running the pipeline." });
+    setStatus("Please choose a scenario first.", "error");
+    return;
+  }
 
   clearErrors();
   setStatus("");
@@ -596,7 +790,7 @@ async function startPipeline(event) {
     return;
   }
 
-  const payload = { extractYears: extractYearsValues };
+  const payload = { extractYears: extractYearsValues, case: currentCase };
 
   if (simulationRaw) {
     const simYears = Number(simulationRaw);
@@ -613,6 +807,8 @@ async function startPipeline(event) {
   runButton.disabled = true;
   runInProgress = true;
   appendLog("# Submitting pipeline run");
+  const caseLabel = resolveCaseLabel(currentCase) || currentCase;
+  appendLog(`# Scenario: ${caseLabel}`);
   appendLog(`# Requested times (years): ${extractYearsValues.map(formatYearsValue).join(", ")}`);
 
   try {
@@ -684,6 +880,7 @@ window.addEventListener("beforeunload", closeEventSource);
 resetStages();
 toggleTerminalBtn.textContent = "Show log";
 const fieldLabels = {
+  case: "Scenario",
   extractYears: "Simulation time(s) (years)",
   simulationYears: "Simulation horizon (years)",
   mesh: "Mesh path",
@@ -693,6 +890,9 @@ resetSimulationProgress();
 ensureOutputsHidden();
 resetCancellationState();
 initMobileNavigation();
+updateNavAvailability();
+void loadCases();
+showCaseSelection();
 
 const percentFormatter = new Intl.NumberFormat(undefined, {
   maximumFractionDigits: 0,
@@ -786,6 +986,7 @@ async function loadOutputs(runId) {
       outputsEmpty.hidden = false;
       outputsEmpty.textContent = "No STL files were produced for this run.";
       destroySurfaceViewer();
+      updateNavAvailability();
       return;
     }
 
@@ -799,6 +1000,7 @@ async function loadOutputs(runId) {
       downloadAllLink.href = "#";
       downloadAllLink.removeAttribute("download");
     }
+    updateNavAvailability();
 
     const viewer = ensureSurfaceViewer();
     const viewerAvailable = Boolean(viewer);
@@ -924,6 +1126,7 @@ async function loadOutputs(runId) {
     outputsEmpty.hidden = false;
     outputsEmpty.textContent = "Unable to load outputs. Check the server logs.";
     destroySurfaceViewer();
+    updateNavAvailability();
   }
 }
 
@@ -970,6 +1173,11 @@ function initMobileNavigation() {
     button.addEventListener("click", () => {
       const targetId = button.dataset.target;
       if (!targetId) {
+        return;
+      }
+      if (targetId === "case-card") {
+        showCaseSelection({ scroll: true });
+        setActiveMobileNav(targetId);
         return;
       }
       const section = document.getElementById(targetId);

@@ -18,9 +18,11 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from paths import BUILD_DIR, SIM_OUTPUT_DIR, extracted_dir
+from case_config import CaseConfig, DEFAULT_CASE_KEY, get_case_config, list_cases
 from time_units import months_to_years, years_to_months
 
+
+CASE_CHOICES = tuple(cfg.key for cfg in list_cases())
 
 def parse_extract_years(raw_values: list[str]) -> tuple[list[float], list[int]]:
     tokens: list[str] = []
@@ -65,6 +67,12 @@ def parse_args() -> argparse.Namespace:
         description="Compile, run the simulation, extract meshes, and export surfaces."
     )
     parser.add_argument(
+        "--case",
+        choices=CASE_CHOICES,
+        default=DEFAULT_CASE_KEY,
+        help=f"Select the simulation case to run (default: {DEFAULT_CASE_KEY}).",
+    )
+    parser.add_argument(
         "--extract-years",
         dest="extract_years",
         type=str,
@@ -102,13 +110,13 @@ def parse_args() -> argparse.Namespace:
     extract_group.add_argument(
         "--mesh",
         type=str,
-        default="mesh/MNI_with_phys.msh",
+        default=None,
         help="Mesh file to feed to the solver.",
     )
     extract_group.add_argument(
         "--procs",
         type=int,
-        default=4,
+        default=None,
         help="Number of MPI processes to launch with mpirun.",
     )
     args = parser.parse_args()
@@ -127,8 +135,20 @@ def run_command(label: str, cmd: list[str], cwd: Path) -> None:
     subprocess.run(cmd, cwd=cwd, check=True)
 
 
-def ensure_binary(build_dir: Path) -> Path:
-    binary = build_dir / "main"
+def run_compile_stage(case_config: CaseConfig, cwd: Path) -> None:
+    commands = [list(cmd) for cmd in case_config.compile_commands]
+    if not commands:
+        print("[skip] Compiling sources (no compile commands configured).")
+        return
+
+    first, *rest = commands
+    run_command("Compiling sources", first, cwd)
+    for command in rest:
+        print(f"[info] ({case_config.key}) running compile helper: {' '.join(command)}")
+        subprocess.run(command, cwd=cwd, check=True)
+
+
+def ensure_binary(binary: Path) -> Path:
     if not binary.exists():
         raise FileNotFoundError(
             f"Binary '{binary}' not found. Ensure the project compiles correctly."
@@ -158,6 +178,7 @@ def timestep_outputs_exist(output_dir: Path, timestep: int) -> bool:
 def main() -> int:
     args = parse_args()
     repo_root = Path(__file__).resolve().parent
+    case_config = get_case_config(args.case)
 
     extract_years = args.extract_years
     extract_timesteps = args.extract_timesteps
@@ -167,20 +188,27 @@ def main() -> int:
     extract_targets = list(zip(extract_timesteps, extract_years))
     max_extract_year = max(extract_years)
 
-    mesh_path = resolve_mesh(args.mesh, repo_root)
+    mesh_argument = args.mesh if args.mesh else case_config.default_mesh
+    mesh_path = resolve_mesh(mesh_argument, repo_root)
+
+    procs = args.procs if args.procs is not None else case_config.default_procs
     sim_years = (
         args.simulation_years if args.simulation_years is not None else max_extract_year
     )
     if sim_years < 0:
         raise ValueError("Simulation time must be positive.")
 
+    sim_output_dir = case_config.sim_output_dir()
+    build_dir = case_config.build_dir
+    binary_path = case_config.binary_path()
+
     outputs_available = all(
-        timestep_outputs_exist(SIM_OUTPUT_DIR, timestep)
+        timestep_outputs_exist(sim_output_dir, timestep)
         for timestep in extract_timesteps
     )
 
-    SIM_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    BUILD_DIR.mkdir(exist_ok=True)
+    sim_output_dir.mkdir(parents=True, exist_ok=True)
+    build_dir.mkdir(parents=True, exist_ok=True)
 
     if outputs_available:
         targets_summary = ", ".join(
@@ -198,10 +226,10 @@ def main() -> int:
                 f"times (maximum {max_extract_year:g} years)."
             )
         # Step 1: compile the project.
-        run_command("Compiling sources", ["python3", "compile.py"], repo_root)
+        run_compile_stage(case_config, repo_root)
 
         # Step 2: run the simulation.
-        binary = ensure_binary(BUILD_DIR)
+        binary = ensure_binary(binary_path)
 
         mpirun = shutil.which("mpirun") or shutil.which("mpiexec")
         if mpirun is None:
@@ -212,32 +240,34 @@ def main() -> int:
             [
                 mpirun,
                 "-np",
-                str(args.procs),
+                str(procs),
                 str(binary),
                 "--mesh",
                 str(mesh_path),
                 "--T",
                 str(sim_years),
                 "--output",
-                str(SIM_OUTPUT_DIR),
+                str(sim_output_dir),
             ],
             repo_root,
         )
 
     # Step 3: extract filtered meshes for the requested timesteps.
     for timestep, years in extract_targets:
-        extracted_path = extracted_dir(timestep)
+        extracted_path = case_config.extracted_dir(timestep)
         run_command(
             "Extracting mesh subsets",
             [
                 "python3",
                 "extract_mesh.py",
+                "--case",
+                case_config.key,
                 "--timestep",
                 str(timestep),
                 "--years",
                 format_years_label(years),
                 "--input-dir",
-                str(SIM_OUTPUT_DIR),
+                str(sim_output_dir),
                 "--output-dir",
                 str(extracted_path),
             ],
@@ -251,7 +281,7 @@ def main() -> int:
         return 0
 
     for timestep, _years in extract_targets:
-        extracted_path = extracted_dir(timestep)
+        extracted_path = case_config.extracted_dir(timestep)
         run_command(
             "Extracting surfaces",
             [

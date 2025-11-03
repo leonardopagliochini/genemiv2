@@ -33,6 +33,13 @@ def main():
     input_dir = os.path.abspath(args.input)
     output_dir = os.path.join(input_dir, "surfaces")
     os.makedirs(output_dir, exist_ok=True)
+    for name in os.listdir(output_dir):
+        if not name.endswith(".stl"):
+            continue
+        try:
+            os.remove(os.path.join(output_dir, name))
+        except OSError:
+            pass
 
     # Find all VTU files in the folder
     vtu_files = [os.path.join(input_dir, f) for f in os.listdir(input_dir) if f.endswith(".vtu")]

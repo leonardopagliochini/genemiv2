@@ -1,3 +1,6 @@
 output/*
 build/*
 .DS_Store
+breast_scripts/build/*
+breast_scripts/mesh/*
+breast_scripts/*.mesh

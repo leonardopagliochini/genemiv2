@@ -1,28 +1,24 @@
 import argparse
+import contextlib
 import glob
+import shutil
 from collections import defaultdict
 from pathlib import Path
 from typing import Callable, Optional
 
 import meshio
 import numpy as np
-from paths import SIM_OUTPUT_DIR
+from case_config import DEFAULT_CASE_KEY, get_case_config, list_cases
 from time_units import months_to_years, years_to_months
 
 DEFAULT_YEARS = 9
 DEFAULT_TIMESTEP = DEFAULT_YEARS * 12
 DEFAULT_FIELD = "c"
-DEFAULT_THRESHOLD = 0.5
+DEFAULT_THRESHOLD = None
 EXPORT_DIR_TEMPLATE = "{label}y_extracted"
 MATERIAL_FIELD = "material_id"
-MATERIAL_LABELS: dict[int, str] = {
-    0: "gray_matter",
-    1: "CSF",
-    2: "white_matter",
-    3: "ventricles",
-}
-CSF_MATERIAL_ID = 1
-VENTRICLES_MATERIAL_ID = 3
+
+CASE_CHOICES = tuple(cfg.key for cfg in list_cases())
 
 
 def format_years_label(years: float) -> str:
@@ -36,6 +32,12 @@ def parse_args() -> argparse.Namespace:
             "Generate meshes filtered by a field threshold by reading all VTU pieces "
             "belonging to the same timestep."
         )
+    )
+    parser.add_argument(
+        "--case",
+        choices=CASE_CHOICES,
+        default=DEFAULT_CASE_KEY,
+        help=f"Pipeline case to process (default: {DEFAULT_CASE_KEY}).",
     )
     parser.add_argument(
         "--years",
@@ -65,7 +67,7 @@ def parse_args() -> argparse.Namespace:
         "--threshold",
         type=float,
         default=DEFAULT_THRESHOLD,
-        help="Numeric threshold used to filter points.",
+        help="Numeric threshold used to filter points (defaults to the case configuration).",
     )
     parser.add_argument(
         "--output-dir",
@@ -76,8 +78,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--input-dir",
         type=Path,
-        default=SIM_OUTPUT_DIR,
-        help="Directory containing the raw simulation VTU files (default: build/output).",
+        default=None,
+        help="Directory containing the raw simulation VTU files. Defaults to the case output directory.",
     )
     args = parser.parse_args()
 
@@ -101,7 +103,7 @@ def parse_args() -> argparse.Namespace:
         args.output_dir = Path(EXPORT_DIR_TEMPLATE.format(label=year_label))
     if not args.output_dir.is_absolute():
         args.output_dir = args.output_dir.resolve()
-    if not args.input_dir.is_absolute():
+    if args.input_dir is not None and not args.input_dir.is_absolute():
         args.input_dir = args.input_dir.resolve()
 
     args.year_label = year_label
@@ -114,7 +116,9 @@ def find_vtu_files(timestep: int, input_dir: Path) -> list[Path]:
     return sorted(Path(path) for path in glob.glob(pattern.as_posix()))
 
 
-def collapse_point_materials(per_cell_values: np.ndarray) -> np.ndarray:
+def collapse_point_materials(
+    per_cell_values: np.ndarray, priority_ids: tuple[int, ...]
+) -> np.ndarray:
     """Derive one material id per cell starting from per-vertex material ids."""
     array = np.asarray(per_cell_values, dtype=int)
     if array.ndim == 1:
@@ -127,7 +131,6 @@ def collapse_point_materials(per_cell_values: np.ndarray) -> np.ndarray:
     num_cells = array.shape[0]
     result = np.empty(num_cells, dtype=int)
 
-    priority_ids = [VENTRICLES_MATERIAL_ID, CSF_MATERIAL_ID]
     remaining_mask = np.ones(num_cells, dtype=bool)
 
     for material_id in priority_ids:
@@ -147,7 +150,10 @@ def collapse_point_materials(per_cell_values: np.ndarray) -> np.ndarray:
 
 
 def load_combined_mesh(
-    vtu_files: list[Path], field_name: str, material_field: str
+    vtu_files: list[Path],
+    field_name: str,
+    material_field: str,
+    priority_ids: tuple[int, ...],
 ) -> tuple[np.ndarray, list[meshio.CellBlock], np.ndarray, list[np.ndarray]]:
     points_list: list[np.ndarray] = []
     values_list: list[np.ndarray] = []
@@ -242,7 +248,7 @@ def load_combined_mesh(
                 material_map[block.type].append(np.asarray(material_values, dtype=int))
             elif material_source == "point" and point_material_values is not None:
                 per_cell_values = point_material_values[block.data]
-                material_ids = collapse_point_materials(per_cell_values)
+                material_ids = collapse_point_materials(per_cell_values, priority_ids)
                 material_map[block.type].append(material_ids)
             else:
                 raise RuntimeError(
@@ -327,11 +333,14 @@ def build_subset_mesh(
         cell_data=cell_data if cell_data else None,
     )
 
-
-
 def main() -> None:
     args = parse_args()
-    input_dir = args.input_dir
+    case_config = get_case_config(args.case)
+
+    input_dir = args.input_dir if args.input_dir is not None else case_config.sim_output_dir()
+    if not input_dir.is_absolute():
+        input_dir = input_dir.resolve()
+
     vtu_files = find_vtu_files(args.timestep, input_dir)
     if not vtu_files:
         pattern = input_dir / f"output_{args.timestep:03d}*.vtu"
@@ -340,18 +349,28 @@ def main() -> None:
         )
 
     field_name = args.field
-    threshold = args.threshold
+    threshold = args.threshold if args.threshold is not None else case_config.default_threshold
+    if threshold is None:
+        raise ValueError("È necessario specificare un valore di soglia numerico per l'estrazione.")
 
     print(
         f"Timestep {args.timestep:03d} ({format_years_label(args.years)} anni): "
         f"trovati {len(vtu_files)} file VTU."
     )
     points, cell_blocks, values, cell_materials = load_combined_mesh(
-        vtu_files, field_name, MATERIAL_FIELD
+        vtu_files,
+        field_name,
+        MATERIAL_FIELD,
+        tuple(case_config.priority_material_ids),
     )
     total_points = values.size
 
-    special_ids = (CSF_MATERIAL_ID, VENTRICLES_MATERIAL_ID)
+    sticky_ids = tuple(case_config.sticky_material_ids)
+
+    def special_mask(materials: Optional[np.ndarray], reference: np.ndarray) -> np.ndarray:
+        if materials is None or not sticky_ids:
+            return np.zeros_like(reference, dtype=bool)
+        return np.isin(materials, sticky_ids)
 
     def below_predicate(
         cell_vals: np.ndarray, materials: Optional[np.ndarray]
@@ -361,9 +380,7 @@ def main() -> None:
         mean_vals = np.mean(cell_vals, axis=1)
 
         mask = cell_max < threshold
-        special = (
-            np.isin(materials, special_ids) if materials is not None else np.zeros_like(mean_vals, dtype=bool)
-        )
+        special = special_mask(materials, mean_vals)
         mask |= special
 
         ambiguous = ~(mask | (cell_min >= threshold))
@@ -380,9 +397,7 @@ def main() -> None:
         mean_vals = np.mean(cell_vals, axis=1)
 
         mask = cell_min >= threshold
-        special = (
-            np.isin(materials, special_ids) if materials is not None else np.zeros_like(mean_vals, dtype=bool)
-        )
+        special = special_mask(materials, mean_vals)
         mask &= ~special
 
         ambiguous = ~(mask | (cell_max < threshold) | special)
@@ -418,7 +433,18 @@ def main() -> None:
 
     output_dir = args.output_dir
     output_dir.mkdir(parents=True, exist_ok=True)
+    # Remove stale VTU files and previously extracted surfaces to avoid duplicate exports.
+    for stale in output_dir.glob("*.vtu"):
+        with contextlib.suppress(OSError):
+            stale.unlink()
+    surfaces_root = output_dir / "surfaces"
+    if surfaces_root.exists():
+        shutil.rmtree(surfaces_root, ignore_errors=True)
     year_label = args.year_label
+
+    material_labels = case_config.material_labels
+    single_surface_labels = case_config.single_surface_labels
+    single_surface_ids = set(single_surface_labels)
 
     def save_mesh(tag_label: str, mesh: meshio.Mesh) -> None:
         base_name = f"output_{year_label}y_{tag_label}"
@@ -441,18 +467,21 @@ def main() -> None:
                 f"Il campo '{field_name}' non è presente nella mesh filtrata '{tag}'."
             )
 
-        cell_blocks = list(mesh.cells)
-        material_blocks = [
+        cell_blocks_local = list(mesh.cells)
+        material_blocks_local = [
             np.asarray(arr).reshape(-1) for arr in mesh.cell_data[MATERIAL_FIELD]
         ]
         values_array = np.asarray(mesh.point_data[field_name])
 
-        for material_id, label in MATERIAL_LABELS.items():
-            if material_id == CSF_MATERIAL_ID:
+        for material_id, label in material_labels.items():
+            if material_id in single_surface_ids:
                 continue
 
             def material_predicate(
-                _cell_vals: np.ndarray, block_materials: Optional[np.ndarray], *, target=material_id
+                _cell_vals: np.ndarray,
+                block_materials: Optional[np.ndarray],
+                *,
+                target=material_id,
             ) -> np.ndarray:
                 if block_materials is None:
                     raise ValueError(
@@ -462,11 +491,11 @@ def main() -> None:
 
             submesh = build_subset_mesh(
                 mesh.points,
-                cell_blocks,
+                cell_blocks_local,
                 values_array,
                 predicate=material_predicate,
                 field_name=field_name,
-                cell_materials=material_blocks,
+                cell_materials=material_blocks_local,
                 material_field=MATERIAL_FIELD,
             )
 
@@ -480,19 +509,32 @@ def main() -> None:
     write_meshes("no_cancer", below_mesh)
     write_meshes("cancer", above_mesh)
 
-    csf_mesh = build_subset_mesh(
-        points,
-        cell_blocks,
-        values,
-        predicate=lambda _cell_vals, mats: mats == CSF_MATERIAL_ID,
-        field_name=field_name,
-        cell_materials=cell_materials,
-        material_field=MATERIAL_FIELD,
-    )
-    if csf_mesh is None:
-        print("Nessuna cella per 'CSF', salto l'esportazione.")
-    else:
-        save_mesh("CSF", csf_mesh)
+    for material_id, label in single_surface_labels.items():
+        def only_material(
+            _cell_vals: np.ndarray,
+            block_materials: Optional[np.ndarray],
+            *,
+            target=material_id,
+        ) -> np.ndarray:
+            if block_materials is None:
+                raise ValueError(
+                    "Dati di materiale mancanti durante la suddivisione per materiale."
+                )
+            return block_materials == target
+
+        single_mesh = build_subset_mesh(
+            points,
+            cell_blocks,
+            values,
+            predicate=only_material,
+            field_name=field_name,
+            cell_materials=cell_materials,
+            material_field=MATERIAL_FIELD,
+        )
+        if single_mesh is None:
+            print(f"Nessuna cella per '{label}', salto l'esportazione.")
+        else:
+            save_mesh(label, single_mesh)
 
     print(f"Punti totali elaborati: {total_points}")
 

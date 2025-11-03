@@ -1,0 +1,16 @@
+nohup: ignoring input
+ * Serving Flask app 'pipeline_server'
+ * Debug mode: on
+WARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:5050
+ * Running on http://192.168.127.184:5050
+Press CTRL+C to quit
+ * Restarting with stat
+ * Debugger is active!
+ * Debugger PIN: 557-389-675
+100.112.11.55 - - [23/Oct/2025 15:05:20] "GET / HTTP/1.1" 304 -
+100.112.11.55 - - [23/Oct/2025 15:05:20] "GET /app.js HTTP/1.1" 304 -
+100.112.11.55 - - [23/Oct/2025 15:05:20] "GET /styles.css HTTP/1.1" 304 -
+100.112.11.55 - - [23/Oct/2025 15:05:21] "GET /favicon.ico HTTP/1.1" 404 -
+100.112.11.55 - - [23/Oct/2025 18:08:18] "GET /favicon.ico HTTP/1.1" 404 -
