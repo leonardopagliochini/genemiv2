@@ -4,3 +4,5 @@ build/*
 breast_scripts/build/*
 breast_scripts/mesh/*
 breast_scripts/*.mesh
+.vscode/*
+__pycache__/*
