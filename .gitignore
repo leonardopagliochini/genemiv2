@@ -6,3 +6,5 @@ breast_scripts/mesh/*
 breast_scripts/*.mesh
 .vscode/*
 __pycache__/*
+breast_scripts/CMakeFiles
+build*

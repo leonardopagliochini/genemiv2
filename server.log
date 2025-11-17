@@ -8,9 +8,27 @@ WARNING: This is a development server. Do not use it in a production deployment.
 Press CTRL+C to quit
  * Restarting with stat
  * Debugger is active!
- * Debugger PIN: 557-389-675
-100.112.11.55 - - [23/Oct/2025 15:05:20] "GET / HTTP/1.1" 304 -
-100.112.11.55 - - [23/Oct/2025 15:05:20] "GET /app.js HTTP/1.1" 304 -
-100.112.11.55 - - [23/Oct/2025 15:05:20] "GET /styles.css HTTP/1.1" 304 -
-100.112.11.55 - - [23/Oct/2025 15:05:21] "GET /favicon.ico HTTP/1.1" 404 -
-100.112.11.55 - - [23/Oct/2025 18:08:18] "GET /favicon.ico HTTP/1.1" 404 -
+ * Debugger PIN: 386-787-824
+100.75.145.117 - - [11/Nov/2025 11:23:55] "GET /apple-touch-icon-precomposed.png HTTP/1.1" 404 -
+100.75.145.117 - - [11/Nov/2025 11:23:55] "GET /api/cases HTTP/1.1" 200 -
+100.75.145.117 - - [11/Nov/2025 11:23:55] "GET /apple-touch-icon.png HTTP/1.1" 404 -
+100.75.145.117 - - [11/Nov/2025 11:24:04] "GET /api/cases HTTP/1.1" 200 -
+192.168.127.185 - - [11/Nov/2025 14:18:42] "GET / HTTP/1.1" 200 -
+192.168.127.185 - - [11/Nov/2025 14:18:42] "GET /styles.css HTTP/1.1" 200 -
+192.168.127.185 - - [11/Nov/2025 14:18:42] "GET /app.js HTTP/1.1" 200 -
+192.168.127.185 - - [11/Nov/2025 14:18:42] "GET /api/cases HTTP/1.1" 200 -
+192.168.127.185 - - [11/Nov/2025 14:18:42] "GET /favicon.ico HTTP/1.1" 404 -
+192.168.127.185 - - [11/Nov/2025 14:19:25] "POST /api/run HTTP/1.1" 200 -
+192.168.127.185 - - [11/Nov/2025 14:19:25] "GET /api/stream/4c83537980b040bdb87259d69a119eb2 HTTP/1.1" 200 -
+192.168.127.185 - - [11/Nov/2025 14:52:08] "GET /api/run/4c83537980b040bdb87259d69a119eb2/outputs HTTP/1.1" 200 -
+127.0.0.1 - - [11/Nov/2025 15:59:45] "GET / HTTP/1.1" 200 -
+127.0.0.1 - - [11/Nov/2025 15:59:45] "GET /styles.css HTTP/1.1" 200 -
+127.0.0.1 - - [11/Nov/2025 15:59:45] "GET /app.js HTTP/1.1" 200 -
+127.0.0.1 - - [11/Nov/2025 15:59:45] "GET /api/cases HTTP/1.1" 200 -
+127.0.0.1 - - [11/Nov/2025 15:59:45] "GET /favicon.ico HTTP/1.1" 404 -
+127.0.0.1 - - [11/Nov/2025 15:59:56] "POST /api/run HTTP/1.1" 200 -
+127.0.0.1 - - [11/Nov/2025 15:59:56] "GET /api/stream/fdfeefbe28ec43df9f33c30d6872fb4d HTTP/1.1" 200 -
+127.0.0.1 - - [11/Nov/2025 16:14:41] "GET /api/cases HTTP/1.1" 200 -
+ * Detected change in '/home/brando/genemiv2/blender_pipeline/blender_pipeline.py', reloading
+ * Restarting with stat
+/home/brando/miniconda3/bin/python3: can't open file '/home/brando/genemiv2/pipeline_server.py': [Errno 2] No such file or directory

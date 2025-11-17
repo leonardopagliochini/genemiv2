@@ -77,6 +77,27 @@
               />
               <small>Number of MPI ranks to launch via mpirun.</small>
             </label>
+
+            <label class="field" id="random-toggle-field" hidden>
+              <span>Randomise tumour starting point</span>
+              <div class="toggle-row">
+                <input type="checkbox" id="random-breast" name="randomBreast" />
+                <span>Generate multiple simulations by sampling lobule centres.</span>
+              </div>
+              <small>Available for the breast scenario. When enabled, each run picks a different starting tumour centre.</small>
+            </label>
+
+            <label class="field" id="random-count-field" hidden>
+              <span>Number of simulations</span>
+              <input
+                type="number"
+                id="random-count"
+                name="randomSimulationCount"
+                min="1"
+                value="3"
+              />
+              <small>Total clinical scenarios to generate.</small>
+            </label>
           </div>
 
           <div class="form-actions">

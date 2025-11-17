@@ -52,7 +52,7 @@ MeshData<3> MNI{
         {3, "ventricule"}
     },
     {    // isotropic diffusion (name -> value)
-        {"gray matter", 0.18},
+        {"gray matter", 0.18}, 
         {"CSF", 0},
         {"white matter", 1.83},
         {"ventricule", 0}
@@ -67,7 +67,7 @@ MeshData<3> MNI{
         {"gray matter", 4.4},
         {"CSF", 0},
         {"white matter", 4.4},
-        {"ventricule", 0}
+        {"ventricule", 0} 
     },
     35.35, 2.43, 4.95, // x0, y0, z0 (initial condition center coords) 
     15, // radius

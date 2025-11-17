@@ -28,6 +28,10 @@ const outputsList = document.getElementById("outputs-list");
 const downloadAllLink = document.getElementById("download-all");
 const mobileNav = document.querySelector(".mobile-nav");
 const mobileNavButtons = mobileNav ? Array.from(mobileNav.querySelectorAll("button")) : [];
+const randomToggleField = document.getElementById("random-toggle-field");
+const randomToggleInput = document.getElementById("random-breast");
+const randomCountField = document.getElementById("random-count-field");
+const randomCountInput = document.getElementById("random-count");
 const viewerContainer = document.getElementById("viewer-container");
 const viewerCanvas = document.getElementById("preview-canvas");
 const viewerHint = document.getElementById("viewer-hint");
@@ -101,6 +105,23 @@ function resetCancellationState() {
   cancelButton.disabled = false;
 }
 
+function updateRandomFieldsVisibility() {
+  if (!randomToggleField || !randomCountField) {
+    return;
+  }
+  const isBreastCase = currentCase === "breast";
+  randomToggleField.hidden = !isBreastCase;
+  if (!isBreastCase) {
+    if (randomToggleInput) {
+      randomToggleInput.checked = false;
+    }
+    randomCountField.hidden = true;
+    return;
+  }
+  const enabled = Boolean(randomToggleInput?.checked);
+  randomCountField.hidden = !enabled;
+}
+
 function updateCaseButtonsState() {
   if (!caseOptionsContainer) {
     return;
@@ -160,6 +181,16 @@ function resetForNewCase() {
   setStatus("");
   setCommandPreview([]);
   terminalLog.textContent = "";
+  if (randomToggleInput) {
+    randomToggleInput.checked = false;
+  }
+  if (randomCountInput) {
+    const fallback = Number.isFinite(Number(randomCountInput.defaultValue))
+      ? randomCountInput.defaultValue
+      : "3";
+    randomCountInput.value = fallback || "3";
+  }
+  updateRandomFieldsVisibility();
 }
 
 function renderCaseOptions(casesData) {
@@ -206,6 +237,7 @@ function selectCase(caseKey) {
   if (logCard) {
     logCard.hidden = false;
   }
+  updateRandomFieldsVisibility();
   updateCaseButtonsState();
   updateNavAvailability();
 }
@@ -511,23 +543,28 @@ function createSurfaceViewer(canvas) {
             side: THREE.DoubleSide,
           });
 
+          const surfaceKey = typeof file.viewerKey === "string" && file.viewerKey.length
+            ? file.viewerKey
+            : file.name;
           const mesh = new THREE.Mesh(geometry, material);
-          mesh.name = file.name;
+          mesh.name = surfaceKey;
           mesh.visible = true;
           group.add(mesh);
 
-          surfaces.set(file.name, { mesh, material, geometry });
+          surfaces.set(surfaceKey, { mesh, material, geometry });
 
           if (!userInteracted) {
             frameScene({ visibleOnly: false });
           }
-          hooks.onMeshLoaded?.(file.name);
+          hooks.onMeshLoaded?.(surfaceKey);
         } catch (error) {
           if (disposed || currentGen !== generation) {
             return;
           }
           console.error("[viewer] Failed to load surface", file?.name, error);
-          hooks.onMeshError?.(file?.name ?? "unknown", error);
+          const surfaceKey =
+            typeof file?.viewerKey === "string" && file.viewerKey.length ? file.viewerKey : file?.name ?? "unknown";
+          hooks.onMeshError?.(surfaceKey, error);
         } finally {
           if (disposed || currentGen !== generation) {
             return;
@@ -654,6 +691,15 @@ function toggleTerminal() {
 }
 
 toggleTerminalBtn.addEventListener("click", toggleTerminal);
+
+if (randomToggleInput) {
+  randomToggleInput.addEventListener("change", () => {
+    if (randomToggleInput.checked && randomCountInput && !randomCountInput.value) {
+      randomCountInput.value = "1";
+    }
+    updateRandomFieldsVisibility();
+  });
+}
 
 function handleEvent(data) {
   switch (data.type) {
@@ -792,6 +838,22 @@ async function startPipeline(event) {
 
   const payload = { extractYears: extractYearsValues, case: currentCase };
 
+  const randomEnabled =
+    currentCase === "breast" && Boolean(randomToggleInput?.checked) && !randomToggleField?.hidden;
+  if (randomEnabled) {
+    const countValue = Number(randomCountInput?.value);
+    if (!Number.isFinite(countValue) || countValue <= 0) {
+      renderErrors({ randomSimulationCount: "Please provide a positive integer." });
+      return;
+    }
+    if (!Number.isInteger(countValue)) {
+      renderErrors({ randomSimulationCount: "Number of simulations must be an integer." });
+      return;
+    }
+    payload.randomBreast = true;
+    payload.randomSimulationCount = countValue;
+  }
+
   if (simulationRaw) {
     const simYears = Number(simulationRaw);
     if (Number.isNaN(simYears) || simYears < 0) {
@@ -885,12 +947,17 @@ const fieldLabels = {
   simulationYears: "Simulation horizon (years)",
   mesh: "Mesh path",
   procs: "MPI processes",
+  randomBreast: "Random tumour placement",
+  randomSimulationCount: "Number of simulations",
+  lobulePoints: "Lobule coordinates file",
+  randomSeed: "Random seed",
 };
 resetSimulationProgress();
 ensureOutputsHidden();
 resetCancellationState();
 initMobileNavigation();
 updateNavAvailability();
+updateRandomFieldsVisibility();
 void loadCases();
 showCaseSelection();
 
@@ -1016,6 +1083,12 @@ async function loadOutputs(runId) {
     let failedSurfaces = 0;
 
     files.forEach((file) => {
+      const displayName =
+        typeof file.displayName === "string" && file.displayName.length ? file.displayName : file.name;
+      const viewerKey =
+        typeof file.viewerKey === "string" && file.viewerKey.length ? file.viewerKey : displayName;
+      const downloadName =
+        typeof file.downloadName === "string" && file.downloadName.length ? file.downloadName : file.name;
       const item = document.createElement("li");
       item.className = "output-item";
 
@@ -1024,8 +1097,15 @@ async function loadOutputs(runId) {
 
       const name = document.createElement("span");
       name.className = "output-name";
-      name.textContent = file.name;
+      name.textContent = displayName;
       details.appendChild(name);
+
+      if (typeof file.simulation === "number" && !Number.isNaN(file.simulation)) {
+        const simMeta = document.createElement("span");
+        simMeta.className = "output-meta";
+        simMeta.textContent = `Simulation ${file.simulation}`;
+        details.appendChild(simMeta);
+      }
 
       if (typeof file.year === "number" && !Number.isNaN(file.year)) {
         const yearMeta = document.createElement("span");
@@ -1048,7 +1128,7 @@ async function loadOutputs(runId) {
       link.className = "ghost-button";
       link.href = file.url;
       link.textContent = "Download";
-      link.setAttribute("download", file.name ?? "");
+      link.setAttribute("download", downloadName ?? "");
       actions.appendChild(link);
 
       if (viewerAvailable) {
@@ -1057,13 +1137,13 @@ async function loadOutputs(runId) {
         toggle.className = "ghost-button visibility-toggle";
         toggle.disabled = true;
         toggle.textContent = "Hide in preview";
-        toggle.setAttribute("aria-label", `Toggle ${file.name} visibility in preview`);
-        toggleButtons.set(file.name, toggle);
+        toggle.setAttribute("aria-label", `Toggle ${displayName} visibility in preview`);
+        toggleButtons.set(viewerKey, toggle);
         toggle.addEventListener("click", () => {
           if (!surfaceViewer) {
             return;
           }
-          const visible = surfaceViewer.toggleSurfaceVisibility(file.name);
+          const visible = surfaceViewer.toggleSurfaceVisibility(viewerKey);
           if (visible === null) {
             return;
           }

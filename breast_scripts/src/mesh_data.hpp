@@ -69,12 +69,12 @@ MeshData<3> Breast{
     },
     {    // alpha coefficients (name -> value)
         {"skin", 0},
-        {"fat", 0.904},
-        {"ductal", 1.292},
-        {"lobulus", 1.421},
-        {"stroma", 1.55}
+        {"fat", 1.772},
+        {"ductal", 2.532},
+        {"lobulus", 2.785},
+        {"stroma", 3.038}
     },
-    3.34, 29.70, 14.9, // x0, y0, z0 (initial condition center coords)
+    -7.47, 15.1314, 12.7729, // x0, y0, z0 (initial condition center coords)
     15, // radius
     10, // center_threshold
     {0.0, 0.0, 40.0}, // axonal_center

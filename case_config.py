@@ -64,7 +64,7 @@ CASE_CONFIGS: Dict[str, CaseConfig] = {
         sticky_material_ids=(1, 3),
         single_surface_labels={1: "CSF"},
         default_threshold=0.5,
-        default_procs=4,
+        default_procs=14,
     ),
     "breast": CaseConfig(
         key="breast",
@@ -86,8 +86,8 @@ CASE_CONFIGS: Dict[str, CaseConfig] = {
         priority_material_ids=(1,),
         sticky_material_ids=(1,),
         single_surface_labels={1: "skin"},
-        default_threshold=0.5,
-        default_procs=4,
+        default_threshold=0.2,
+        default_procs=14,
     ),
 }
 

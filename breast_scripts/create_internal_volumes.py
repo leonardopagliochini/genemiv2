@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Iterable, List, Sequence, Tuple
 
 import meshio
@@ -611,6 +612,45 @@ def _ensure_gmsh_physical_labels(
     return mesh
 
 
+def _collect_region_vertex_coordinates(
+    mesh: meshio.Mesh, region_id: int
+) -> np.ndarray:
+    """Return coordinates for vertices belonging to cells with a given region id."""
+    try:
+        tetra_block_idx = next(
+            idx for idx, block in enumerate(mesh.cells) if block.type == "tetra"
+        )
+    except StopIteration as exc:
+        raise ValueError("Mesh lacks tetrahedral volume elements.") from exc
+
+    gmsh_phys_blocks = mesh.cell_data.get("gmsh:physical")
+    if (
+        gmsh_phys_blocks is None
+        or len(gmsh_phys_blocks) <= tetra_block_idx
+        or gmsh_phys_blocks[tetra_block_idx] is None
+    ):
+        raise ValueError("Mesh is missing gmsh:physical labels required for export.")
+
+    region_mask = gmsh_phys_blocks[tetra_block_idx] == region_id
+    if not np.any(region_mask):
+        return np.empty((0, mesh.points.shape[1]), dtype=float)
+
+    connectivity = mesh.cells[tetra_block_idx].data
+    vertex_indices = np.unique(connectivity[region_mask].ravel())
+    return mesh.points[vertex_indices]
+
+
+def _write_lobule_coordinates(mesh: meshio.Mesh, output_path: Path) -> int:
+    """Write coordinates for lobule vertices (region id 4) and return count."""
+    coords = _collect_region_vertex_coordinates(mesh, region_id=4)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    if coords.size == 0:
+        output_path.write_text("")
+        return 0
+    np.savetxt(output_path, coords, delimiter=",", fmt="%.8f")
+    return coords.shape[0]
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -622,7 +662,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "-o",
         "--output",
-        default="breast_128_augmented.msh",
+        default="mesh/breast_128_augmented.msh",
         help="Output path for the augmented mesh (default: breast_128_augmented.msh)",
     )
     parser.add_argument(
@@ -649,7 +689,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--max-angle-x",
         type=float,
-        default=18,
+        default=27,
         help=(
             "Maximum angular deviation along the global X direction in degrees "
             "(default: 20 if unspecified)."
@@ -725,6 +765,14 @@ def parse_args() -> argparse.Namespace:
         default=[2],
         metavar="REGION",
         help="Existing region IDs eligible for periduct reassignment (default: 2)",
+    )
+    parser.add_argument(
+        "--lobule-coords-output",
+        default=None,
+        help=(
+            "Optional path to write coordinates of vertices belonging to the lobule region "
+            "(gmsh:physical id 4). Defaults to <output> with '_lobules_points.csv' suffix."
+        ),
     )
     return parser.parse_args()
 
@@ -846,6 +894,18 @@ def main() -> None:
         meshio.write(args.output, labeled)
     else:
         meshio.write(args.output, labeled, file_format=out_fmt, binary=False)
+
+    output_path = Path(args.output)
+    lobule_coords_path = (
+        Path(args.lobule_coords_output)
+        if args.lobule_coords_output is not None
+        else output_path.with_name(f"{output_path.stem}_lobules_points.csv")
+    )
+    lobule_count = _write_lobule_coordinates(labeled, lobule_coords_path)
+    print(
+        f"Wrote {lobule_count} lobule vertex coordinate"
+        f"{'' if lobule_count == 1 else 's'} to {lobule_coords_path}."
+    )
 
 
 if __name__ == "__main__":
