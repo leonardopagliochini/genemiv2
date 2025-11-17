@@ -36,10 +36,11 @@ namespace
               << "  --deltat <value>          Time step size (default: 1/12)\n"
               << "  --output <directory>      Output folder for VTU results (default: ./output)\n"
               << "  --output-period <value>   Number of time steps between outputs (default: 6)\n"
+              << "  --starting <x> <y> <z>    Override tumour starting point coordinates\n"
               << "  -h, --help                Show this message\n"
               << "\n"
               << "Mesh identifiers can be one of the predefined presets "
-              << "(MNI, Ernie, BrainCoarse, Cube40, Sagittal, Sagittal_whiteGrayDiff)\n"
+              << "(MNI, Ernie, BrainCoarse, Breast, Cube40, Sagittal, Sagittal_whiteGrayDiff)\n"
               << "or a path to a supported mesh file.\n";
   }
 
@@ -78,6 +79,10 @@ int main(int argc, char *argv[])
   unsigned int       output_period = 6;
   std::string        output_directory = "./output";
   std::string        mesh_argument;
+  bool               starting_point_set = false;
+  double             starting_x = 0.0;
+  double             starting_y = 0.0;
+  double             starting_z = 0.0;
   bool               mesh_argument_set = false;
 
   for (int i = 1; i < argc; ++i)
@@ -172,6 +177,29 @@ int main(int argc, char *argv[])
               return 1;
             }
         }
+      else if (arg == "--starting")
+        {
+          if (i + 3 >= argc)
+            {
+              if (mpi_rank == 0)
+                std::cerr << "Option --starting requires three values (x y z)." << std::endl;
+              print_usage(argv[0], mpi_rank);
+              return 1;
+            }
+          try
+            {
+              starting_x = std::stod(argv[++i]);
+              starting_y = std::stod(argv[++i]);
+              starting_z = std::stod(argv[++i]);
+              starting_point_set = true;
+            }
+          catch (const std::exception &)
+            {
+              if (mpi_rank == 0)
+                std::cerr << "Unable to parse values for --starting." << std::endl;
+              return 1;
+            }
+        }
       else if (!arg.empty() && arg[0] != '-')
         {
           if (!mesh_argument_set)
@@ -215,6 +243,13 @@ int main(int argc, char *argv[])
         mesh2 = get_mesh_data<2>(mesh_argument, mpi_rank);
       else
         mesh2 = get_mesh_data_from_path_2d(mesh_argument, mpi_rank);
+
+      if (starting_point_set)
+        {
+          mesh2.x0 = starting_x;
+          mesh2.y0 = starting_y;
+          mesh2.z0 = starting_z;
+        }
     }
   else
     {
@@ -222,6 +257,13 @@ int main(int argc, char *argv[])
         mesh3 = get_mesh_data<3>(mesh_argument, mpi_rank);
       else
         mesh3 = get_mesh_data_from_path_3d(mesh_argument, mpi_rank);
+
+      if (starting_point_set)
+        {
+          mesh3.x0 = starting_x;
+          mesh3.y0 = starting_y;
+          mesh3.z0 = starting_z;
+        }
     }
 
   std::string normalized_output_directory =
@@ -242,6 +284,14 @@ int main(int argc, char *argv[])
 
   MPI_Barrier(MPI_COMM_WORLD);
   output_directory = ensure_trailing_separator(normalized_output_directory);
+
+  if (starting_point_set && mpi_rank == 0)
+    {
+      std::cout << "Tumour starting point set to ("
+                << starting_x << ", "
+                << starting_y << ", "
+                << starting_z << ")." << std::endl;
+    }
 
   printRankZero("Note: axonal_vector field and material_id will be written only at the first time step "
                 "(time_step=0), to save disk space.",

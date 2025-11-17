@@ -20,7 +20,8 @@ from pathlib import Path
 
 import numpy as np
 
-from case_config import CaseConfig, get_case_config
+from APP.utils.case_config import CaseConfig, get_case_config
+from APP.utils.paths import REPO_ROOT
 
 
 def parse_extract_years(raw_values: list[str]) -> tuple[list[float], list[int]]:
@@ -198,7 +199,7 @@ def main() -> int:
         raise ValueError("No valid extraction times were provided.")
 
     case_config = get_case_config("breast")
-    repo_root = Path(__file__).resolve().parent
+    repo_root = REPO_ROOT
 
     mesh_argument = args.mesh if args.mesh else case_config.default_mesh
     mesh_path = resolve_mesh(mesh_argument, repo_root)
@@ -228,7 +229,7 @@ def main() -> int:
     binary = ensure_binary(case_config.binary_path())
 
     mpirun = shutil.which("mpirun") or shutil.which("mpiexec")
-    if mpirun is None:
+    if (mpirun is None):
         raise FileNotFoundError("Neither 'mpirun' nor 'mpiexec' was found in PATH.")
 
     pvpython = shutil.which("pvpython")
@@ -270,7 +271,7 @@ def main() -> int:
                 "Extracting mesh subsets",
                 [
                     "python3",
-                    "extract_mesh.py",
+                    str(repo_root / "post_process" / "extract_mesh.py"),
                     "--case",
                     case_config.key,
                     "--timestep",
@@ -290,7 +291,7 @@ def main() -> int:
                     "Extracting surfaces",
                     [
                         pvpython,
-                        "extract_surfaces.py",
+                        str(repo_root / "post_process" / "extract_surfaces.py"),
                         "--input",
                         str(extracted_path),
                     ],

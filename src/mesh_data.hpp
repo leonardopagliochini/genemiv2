@@ -33,6 +33,7 @@ is_known_3d_mesh_preset(const std::string &mesh_preset)
     return mesh_preset == "MNI" ||
            mesh_preset == "Ernie" ||
            mesh_preset == "BrainCoarse" ||
+           mesh_preset == "Breast" ||
            mesh_preset == "Cube40";
 }
 
@@ -42,6 +43,45 @@ is_known_2d_mesh_preset(const std::string &mesh_preset)
     return mesh_preset == "Sagittal" ||
            mesh_preset == "Sagittal_whiteGrayDiff";
 }
+
+MeshData<3> Breast{
+    "../mesh/breast/breast_128_augmented.msh", // mesh_file_name
+    {    // material_names (id -> name)
+        {1, "skin"},
+        {2, "fat"},
+        {3, "ductal"},
+        {4, "lobulus"},
+        {5, "stroma"}
+    },
+    {    // isotropic diffusion (name -> value)
+        {"skin", 0},
+        {"fat", 0.1826},
+        {"ductal", 3.6525},
+        {"lobulus", 0.3653},
+        {"stroma", 1.8263}
+    },
+    {    // axonal diffusion (name -> value)
+        {"skin", 0},
+        {"fat", 0},
+        {"ductal", 0},
+        {"lobulus", 0},
+        {"stroma", 0}
+    },
+    {    // alpha coefficients (name -> value)
+        {"skin", 0},
+        {"fat", 1.772},
+        {"ductal", 2.532},
+        {"lobulus", 2.785},
+        {"stroma", 3.038}
+    },
+    -7.47, 15.1314, 12.7729, // x0, y0, z0 (initial condition center coords)
+    15, // radius
+    10, // center_threshold
+    {0.0, 0.0, 40.0}, // axonal_center
+    40, // a (X axis)
+    60, // b (Y axis)
+    30  // c (Z axis)
+};
 
 MeshData<3> MNI{
     "../mesh/MNI_with_phys.msh", // mesh_file_name
@@ -223,6 +263,7 @@ void printErrValidOptions(const std::string& mesh_preset, unsigned int mpiRank){
     std::cerr << " - MNI" << std::endl;
     std::cerr << " - Ernie" << std::endl;
     std::cerr << " - BrainCoarse" << std::endl;
+    std::cerr << " - Breast" << std::endl;
     std::cerr << " - Cube40" << std::endl;
 }
 
@@ -245,6 +286,12 @@ inline bool try_match_mesh_path_3d(const std::string &mesh_value, MeshData<3> &m
     }
     if(matches_mesh_identifier(mesh_value, BrainCoarse)){
         matched_mesh = BrainCoarse;
+        if (contains_path_separator(mesh_value))
+            matched_mesh.mesh_file_name = mesh_value;
+        return true;
+    }
+    if(matches_mesh_identifier(mesh_value, Breast)){
+        matched_mesh = Breast;
         if (contains_path_separator(mesh_value))
             matched_mesh.mesh_file_name = mesh_value;
         return true;
@@ -303,6 +350,9 @@ MeshData<3> get_mesh_data(const std::string& mesh_preset, unsigned int mpiRank){
     } else if(mesh_preset == "BrainCoarse"){
         printRankZero("Using BrainCoarse mesh.", mpiRank);
         return BrainCoarse;
+    } else if(mesh_preset == "Breast"){
+        printRankZero("Using Breast mesh.", mpiRank);
+        return Breast;
     } else if(mesh_preset == "Cube40"){
         printRankZero("Using Cube40 mesh.", mpiRank);
         return Cube40;

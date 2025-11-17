@@ -1,6 +1,80 @@
 #include "FisherKolmogorov.hpp"
+#include <filesystem>
+#include <fstream>
+#include <mpi.h>
 #include <set>
+#include <deal.II/base/mpi.h>
 #include <deal.II/lac/affine_constraints.templates.h>
+
+namespace
+{
+  template <int dim>
+  void override_material_ids_if_available(const std::string &mesh_file_name,
+                                          Triangulation<dim> &mesh,
+                                          ConditionalOStream &pcout)
+  {
+    namespace fs = std::filesystem;
+
+    const fs::path mesh_path(mesh_file_name);
+    const std::string mapping_basename =
+      mesh_path.stem().string() + "_material_ids.txt";
+
+    std::vector<fs::path> candidates;
+    if (!mesh_path.parent_path().empty())
+      candidates.push_back(mesh_path.parent_path() / mapping_basename);
+    else
+      candidates.push_back(fs::path(mapping_basename));
+
+    candidates.push_back(fs::path("mesh") / mapping_basename);
+
+    fs::path mapping_path;
+    for (const auto &candidate : candidates)
+      if (!candidate.empty() && fs::exists(candidate))
+        {
+          mapping_path = candidate;
+          break;
+        }
+
+    if (mapping_path.empty())
+      return;
+
+    std::ifstream in(mapping_path);
+    if (!in)
+      {
+        if (pcout.is_active())
+          pcout << "[warn] Unable to open material-id mapping file '"
+                << mapping_path.string()
+                << "'. Falling back to material ids embedded in the mesh."
+                << std::endl;
+        return;
+      }
+
+    std::vector<unsigned int> ids;
+    ids.reserve(mesh.n_active_cells());
+
+    unsigned int value = 0;
+    while (in >> value)
+      ids.push_back(value);
+
+    if (ids.size() != mesh.n_active_cells())
+      {
+        if (pcout.is_active())
+          pcout << "[warn] Material-id mapping '" << mapping_path.string()
+                << "' contains " << ids.size()
+                << " entries, but the mesh exposes " << mesh.n_active_cells()
+                << " active cells. Ignoring mapping." << std::endl;
+        return;
+      }
+
+    unsigned int idx = 0;
+    for (auto cell = mesh.begin_active(); cell != mesh.end(); ++cell, ++idx)
+      cell->set_material_id(ids[idx]);
+
+    if (pcout.is_active())
+      pcout << "  Replaced material ids using mapping '"
+            << mapping_path.string() << "'." << std::endl;
+  }
+} // namespace
 
 template<unsigned int dim>
 void FisherKolmogorov<dim>::setup()
@@ -16,6 +90,7 @@ void FisherKolmogorov<dim>::setup()
 
     std::ifstream grid_in_file(mesh_file_name);
     grid_in.read_msh(grid_in_file);
+    override_material_ids_if_available(mesh_file_name, mesh_serial, pcout);
 
     GridTools::partition_triangulation(mpi_size, mesh_serial);
     const auto construction_data = TriangulationDescription::Utilities::create_description_from_triangulation(mesh_serial, MPI_COMM_WORLD);
@@ -122,15 +197,13 @@ void FisherKolmogorov<dim>::setup()
         axonal_vector
     );
 
-    // Calculate white/gray matter distribution for visualization
-    std::vector<unsigned int> material_id_vec;
+    // Calculate material distribution for visualization
+    material_ids.reinit(mesh.n_global_active_cells());
+    material_ids = 0.0;
     for (const auto &cell : dof_handler.active_cell_iterators())
-      if (cell->is_locally_owned() || cell->is_ghost())
-        material_id_vec.push_back(cell->material_id());
-
-    material_ids.reinit(material_id_vec.size());
-    for (unsigned int i = 0; i < material_id_vec.size(); ++i)
-      material_ids[i] = material_id_vec[i];
+      if (cell->is_locally_owned())
+        material_ids[cell->active_cell_index()] =
+          static_cast<double>(cell->material_id());
 
     }
 
@@ -367,7 +440,18 @@ void FisherKolmogorov<dim>::output(const unsigned int &time_step) const
   
   data_out.build_patches();
 
-  data_out.write_vtu_with_pvtu_record(output_directory, "output", time_step, MPI_COMM_WORLD, 3);
+  std::filesystem::path output_path(output_directory);
+  if (mpi_rank == 0 && !output_directory.empty())
+    std::filesystem::create_directories(output_path);
+  MPI_Barrier(MPI_COMM_WORLD);
+
+  std::string directory = output_path.string();
+  if (directory.empty())
+    directory = "./";
+  if (directory.back() != '/' && directory.back() != '\\')
+    directory += '/';
+
+  data_out.write_vtu_with_pvtu_record(directory, "output", time_step, MPI_COMM_WORLD, 3);
 }
 
 template<unsigned int dim>

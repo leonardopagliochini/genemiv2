@@ -36,4 +36,4 @@ set_property(DIRECTORY APPEND PROPERTY ADDITIONAL_MAKE_CLEAN_FILES
         "output/*.vtu"
 )
 
-add_dependencies(main create_output_dir)
+add_dependencies(main remove_vtu_files create_output_dir)
